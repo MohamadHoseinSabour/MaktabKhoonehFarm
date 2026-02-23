@@ -9,7 +9,8 @@ from app.models.course import Course
 from app.models.episode import Episode
 from app.models.enums import AssetStatus, CourseStatus, LogLevel
 from app.schemas.course import CourseCreate, CourseDetailOut, CourseOut, CourseUpdate, ToggleDebugResponse
-from app.services.course_service import course_storage_root, scrape_course_metadata
+from app.services.course_service import course_storage_root
+from app.services.local_runner import run_in_background
 from app.services.task_dispatcher import celery_worker_available
 from app.services.task_logger import log_task_sync
 from app.tasks.course_tasks import scrape_course_task
@@ -154,29 +155,12 @@ def _dispatch_scrape(db: Session, course: Course) -> None:
     log_task_sync(
         db,
         level=LogLevel.WARNING,
-        message='No Celery worker detected; scraping is running synchronously.',
+        message='No Celery worker detected; scraping is running in local background worker.',
         task_type='scrape',
-        status='running',
+        status='queued',
         course_id=course.id,
     )
-    try:
-        scrape_course_metadata(db, course)
-        log_task_sync(
-            db,
-            level=LogLevel.INFO,
-            message='Course scraped successfully (sync fallback)',
-            task_type='scrape',
-            status='completed',
-            course_id=course.id,
-        )
-    except Exception as exc:
-        course.status = CourseStatus.ERROR
-        db.commit()
-        log_task_sync(
-            db,
-            level=LogLevel.ERROR,
-            message=f'Scrape failed (sync fallback): {exc}',
-            task_type='scrape',
-            status='failed',
-            course_id=course.id,
-        )
+    run_in_background(
+        lambda: scrape_course_task.run(str(course.id)),
+        name=f'acms-scrape-{course.id}',
+    )

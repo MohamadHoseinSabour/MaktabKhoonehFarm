@@ -1,12 +1,21 @@
 import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.models.course import Course
 from app.models.episode import Episode
-from app.models.enums import AssetStatus
+from app.models.enums import AssetStatus, LogLevel
 from app.schemas.episode import EpisodeOut, EpisodeUpdate
+from app.services.course_service import course_storage_root
+from app.services.downloader.engine import DownloadEngine
+from app.services.downloader.file_validator import FileValidator
+from app.services.processor.file_cleaner import clean_filename
+from app.services.processor.subtitle_processor import SubtitleProcessor
+from app.services.task_logger import log_task_sync
 
 router = APIRouter()
 
@@ -54,3 +63,167 @@ def retry_episode(episode_id: uuid.UUID, db: Session = Depends(get_db)):
 
     db.commit()
     return {'episode_id': str(episode.id), 'reset': changed}
+
+
+@router.post('/episodes/{episode_id}/download/')
+def download_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db)):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail='Episode not found')
+
+    course = db.query(Course).filter(Course.id == episode.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail='Course not found')
+
+    root = course_storage_root(course)
+    engine = DownloadEngine()
+    validator = FileValidator()
+
+    result = _download_episode_assets(db, episode, root, engine, validator)
+    return {'episode_id': str(episode.id), 'result': result}
+
+
+@router.post('/episodes/{episode_id}/process/')
+def process_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db)):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail='Episode not found')
+
+    course = db.query(Course).filter(Course.id == episode.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail='Course not found')
+
+    root = course_storage_root(course)
+    processor = SubtitleProcessor()
+    changes: list[str] = []
+
+    if episode.subtitle_local_path and Path(episode.subtitle_local_path).exists():
+        src = Path(episode.subtitle_local_path)
+        dst = root / 'subtitles' / 'processed' / src.name
+        episode.subtitle_status = AssetStatus.PROCESSING
+        db.commit()
+        try:
+            processor.process(src, dst)
+            episode.subtitle_processed_path = str(dst)
+            episode.subtitle_status = AssetStatus.PROCESSED
+            changes.append('subtitle')
+        except Exception as exc:
+            episode.subtitle_status = AssetStatus.ERROR
+            episode.error_message = f'Subtitle processing failed: {exc}'
+        db.commit()
+
+    if episode.video_status == AssetStatus.DOWNLOADED:
+        episode.video_status = AssetStatus.PROCESSED
+        changes.append('video')
+        db.commit()
+
+    if episode.exercise_status == AssetStatus.DOWNLOADED:
+        episode.exercise_status = AssetStatus.PROCESSED
+        changes.append('exercise')
+        db.commit()
+
+    log_task_sync(
+        db,
+        level=LogLevel.INFO,
+        message=f'Episode processed ({episode.episode_number})',
+        task_type='process_episode',
+        status='completed',
+        course_id=course.id,
+        episode_id=episode.id,
+        details={'changes': changes},
+    )
+
+    return {'episode_id': str(episode.id), 'processed': changes}
+
+
+@router.post('/episodes/{episode_id}/upload/')
+def upload_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db)):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail='Episode not found')
+
+    uploaded: list[str] = []
+    for field in ['video_status', 'subtitle_status', 'exercise_status']:
+        current = getattr(episode, field)
+        if current in {AssetStatus.DOWNLOADED, AssetStatus.PROCESSED}:
+            setattr(episode, field, AssetStatus.UPLOADED)
+            uploaded.append(field.replace('_status', ''))
+        elif current == AssetStatus.UPLOADING:
+            setattr(episode, field, AssetStatus.UPLOADED)
+            uploaded.append(field.replace('_status', ''))
+
+    db.commit()
+    return {'episode_id': str(episode.id), 'uploaded': uploaded}
+
+
+def _download_episode_assets(
+    db: Session,
+    episode: Episode,
+    root: Path,
+    engine: DownloadEngine,
+    validator: FileValidator,
+) -> dict:
+    result: dict[str, str] = {}
+
+    if episode.video_download_url:
+        filename = clean_filename(episode.video_filename or f'{episode.episode_number or 0:03d}-video.mp4')
+        target = root / 'videos' / filename
+        episode.video_status = AssetStatus.DOWNLOADING
+        episode.error_message = None
+        episode.last_attempt_at = datetime.now(timezone.utc)
+        db.commit()
+        try:
+            download_result = engine.download(episode.video_download_url, target)
+            episode.video_local_path = str(download_result.path)
+            episode.video_size = download_result.downloaded_bytes
+            episode.video_status = AssetStatus.DOWNLOADED if validator.validate_video(target) else AssetStatus.ERROR
+            result['video'] = episode.video_status.value
+        except Exception as exc:
+            episode.video_status = AssetStatus.ERROR
+            episode.error_message = f'Video download failed: {exc}'
+            result['video'] = 'error'
+        finally:
+            episode.retry_count += 1
+            db.commit()
+
+    if episode.subtitle_download_url:
+        filename = clean_filename(episode.subtitle_filename or f'{episode.episode_number or 0:03d}-subtitle.srt')
+        target = root / 'subtitles' / 'original' / filename
+        episode.subtitle_status = AssetStatus.DOWNLOADING
+        episode.error_message = None
+        episode.last_attempt_at = datetime.now(timezone.utc)
+        db.commit()
+        try:
+            download_result = engine.download(episode.subtitle_download_url, target)
+            episode.subtitle_local_path = str(download_result.path)
+            episode.subtitle_status = AssetStatus.DOWNLOADED if validator.validate_srt(target) else AssetStatus.ERROR
+            result['subtitle'] = episode.subtitle_status.value
+        except Exception as exc:
+            episode.subtitle_status = AssetStatus.ERROR
+            episode.error_message = f'Subtitle download failed: {exc}'
+            result['subtitle'] = 'error'
+        finally:
+            episode.retry_count += 1
+            db.commit()
+
+    if episode.exercise_download_url:
+        filename = clean_filename(episode.exercise_filename or f'{episode.episode_number or 0:03d}-exercise.zip')
+        target = root / 'exercises' / filename
+        episode.exercise_status = AssetStatus.DOWNLOADING
+        episode.error_message = None
+        episode.last_attempt_at = datetime.now(timezone.utc)
+        db.commit()
+        try:
+            download_result = engine.download(episode.exercise_download_url, target)
+            episode.exercise_local_path = str(download_result.path)
+            episode.exercise_status = AssetStatus.DOWNLOADED
+            result['exercise'] = episode.exercise_status.value
+        except Exception as exc:
+            episode.exercise_status = AssetStatus.ERROR
+            episode.error_message = f'Exercise download failed: {exc}'
+            result['exercise'] = 'error'
+        finally:
+            episode.retry_count += 1
+            db.commit()
+
+    return result

@@ -118,6 +118,30 @@ export async function getEpisodes(courseId: string) {
   return request<Episode[]>(`/api/courses/${courseId}/episodes/`)
 }
 
+export async function downloadEpisode(episodeId: string) {
+  return request<{ episode_id: string; result: Record<string, string> }>(`/api/episodes/${episodeId}/download/`, {
+    method: 'POST',
+  })
+}
+
+export async function processEpisode(episodeId: string) {
+  return request<{ episode_id: string; processed: string[] }>(`/api/episodes/${episodeId}/process/`, {
+    method: 'POST',
+  })
+}
+
+export async function uploadEpisode(episodeId: string) {
+  return request<{ episode_id: string; uploaded: string[] }>(`/api/episodes/${episodeId}/upload/`, {
+    method: 'POST',
+  })
+}
+
+export async function retryEpisode(episodeId: string) {
+  return request<{ episode_id: string; reset: string[] }>(`/api/episodes/${episodeId}/retry/`, {
+    method: 'POST',
+  })
+}
+
 export async function getDashboardStats() {
   return request<DashboardStats>('/api/dashboard/stats/')
 }

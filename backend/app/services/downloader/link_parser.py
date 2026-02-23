@@ -25,7 +25,8 @@ HASH_CODE_RE = re.compile(r'-(?P<hash>[A-Za-z0-9]{4})-git\.ir', re.IGNORECASE)
 
 
 def parse_bulk_links(raw_links: str) -> list[ParsedLink]:
-    links = FILE_URL_RE.findall(raw_links)
+    normalized = raw_links.replace('&amp;', '&')
+    links = FILE_URL_RE.findall(normalized)
     parsed: list[ParsedLink] = []
     for link in links:
         item = parse_link(link)
@@ -36,9 +37,10 @@ def parse_bulk_links(raw_links: str) -> list[ParsedLink]:
 
 def parse_link(link: str) -> ParsedLink | None:
     parsed_url = urlparse(link)
-    query = parse_qs(parsed_url.query)
+    query = parse_qs(parsed_url.query.replace('amp;', ''))
 
-    filename = Path(unquote(parsed_url.path)).name
+    filename_query = _first_value(query, 'filename', 'file', 'name')
+    filename = Path(unquote(filename_query)).name if filename_query else Path(unquote(parsed_url.path)).name
     if not filename:
         return None
 
@@ -110,8 +112,12 @@ def extract_course_api_id(path: str, query: dict[str, list[str]]) -> str | None:
         if value:
             return value
 
+    direct_match = re.search(r'/get-download-links/([a-z0-9]{4,10})/?', path, flags=re.IGNORECASE)
+    if direct_match:
+        return direct_match.group(1)
+
     segments = [seg for seg in path.split('/') if seg]
-    for segment in segments:
+    for segment in reversed(segments):
         if re.match(r'^[a-z0-9]{4,10}$', segment, flags=re.IGNORECASE):
             return segment
     return None

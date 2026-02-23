@@ -65,8 +65,8 @@ class SubtitleProcessor:
 
             if self.config.normalize_persian_chars:
                 content = (
-                    content.replace('?', '?')
-                    .replace('?', '?')
+                    content.replace('\u064A', '\u06CC')
+                    .replace('\u0643', '\u06A9')
                     .replace('\u200c\u200c', '\u200c')
                 )
 

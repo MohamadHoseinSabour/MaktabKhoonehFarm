@@ -2,6 +2,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlparse
 
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -32,7 +33,8 @@ class DownloadEngine:
         reraise=True,
     )
     def _head(self, url: str, headers: dict[str, str] | None = None) -> requests.Response:
-        response = requests.head(url, headers=headers, timeout=self.timeout, allow_redirects=True)
+        prepared_headers = self._prepare_headers(url, headers)
+        response = requests.head(url, headers=prepared_headers, timeout=self.timeout, allow_redirects=True)
         response.raise_for_status()
         return response
 
@@ -46,11 +48,12 @@ class DownloadEngine:
     ) -> DownloadResult:
         destination.parent.mkdir(parents=True, exist_ok=True)
 
-        head = self._head(url, headers=headers)
+        base_headers = self._prepare_headers(url, headers)
+        head = self._head(url, headers=base_headers)
         total_size = int(head.headers.get('Content-Length', '0')) or None
 
         existing = destination.stat().st_size if destination.exists() else 0
-        request_headers = dict(headers or {})
+        request_headers = dict(base_headers)
 
         if existing and total_size and existing < total_size:
             request_headers['Range'] = f'bytes={existing}-'
@@ -59,7 +62,7 @@ class DownloadEngine:
             existing = 0
             mode = 'wb'
 
-        with requests.get(url, headers=request_headers, stream=True, timeout=self.timeout) as response:
+        with requests.get(url, headers=request_headers, stream=True, timeout=self.timeout, allow_redirects=True) as response:
             if response.status_code not in (200, 206):
                 response.raise_for_status()
 
@@ -115,3 +118,15 @@ class DownloadEngine:
                             time.sleep(expected_elapsed - elapsed)
 
         return DownloadResult(path=destination, total_size=total_size, downloaded_bytes=downloaded)
+
+    def _prepare_headers(self, url: str, headers: dict[str, str] | None = None) -> dict[str, str]:
+        merged = {
+            'User-Agent': settings.scraper_user_agent,
+            'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8',
+            'Accept': '*/*',
+            **(headers or {}),
+        }
+        host = (urlparse(url).hostname or '').lower()
+        if host.endswith('git.ir') and 'Referer' not in merged:
+            merged['Referer'] = 'https://git.ir/'
+        return merged

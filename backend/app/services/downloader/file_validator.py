@@ -24,8 +24,12 @@ class FileValidator:
             '-show_streams',
             str(file_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        return result.returncode == 0
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            return result.returncode == 0
+        except FileNotFoundError:
+            # Local development fallback when ffprobe is not installed.
+            return file_path.exists() and file_path.stat().st_size > 1024
 
     @staticmethod
     def validate_srt(file_path: Path) -> bool:

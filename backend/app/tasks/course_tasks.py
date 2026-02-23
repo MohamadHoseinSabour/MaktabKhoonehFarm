@@ -97,8 +97,21 @@ def process_course_task(self, course_id: str):
         for episode in episodes:
             _download_episode_assets(db, engine, validator, course, episode, root)
 
-        course.status = CourseStatus.PROCESSING
+        failed_assets = any(
+            item in {AssetStatus.ERROR}
+            for ep in episodes
+            for item in [ep.video_status, ep.subtitle_status, ep.exercise_status]
+        )
+        course.status = CourseStatus.ERROR if failed_assets else CourseStatus.PROCESSING
         db.commit()
+        log_task_sync(
+            db,
+            level=LogLevel.WARNING if failed_assets else LogLevel.INFO,
+            message='Download pipeline finished with errors' if failed_assets else 'Download pipeline finished',
+            task_type='download',
+            status='failed' if failed_assets else 'completed',
+            course_id=course.id,
+        )
         return {'ok': True, 'course_id': course_id, 'episodes_processed': len(episodes)}
     except Exception as exc:
         if 'course' in locals() and course:
@@ -223,15 +236,26 @@ def _download_episode_assets(
     episode: Episode,
     root: Path,
 ) -> None:
+    ep_num = episode.episode_number if episode.episode_number is not None else '-'
     if course.debug_mode:
         debug_headers = {'X-Debug-Mode': '1'}
     else:
         debug_headers = None
 
     if episode.video_download_url and episode.video_status in {AssetStatus.PENDING, AssetStatus.ERROR}:
+        log_task_sync(
+            db,
+            level=LogLevel.INFO,
+            message=f'Episode {ep_num}: starting video download',
+            task_type='download_video',
+            status='running',
+            course_id=course.id,
+            episode_id=episode.id,
+        )
         filename = clean_filename(episode.video_filename or f'{episode.episode_number or 0:03d}-video.mp4')
         target = root / 'videos' / filename
         episode.video_status = AssetStatus.DOWNLOADING
+        episode.error_message = None
         episode.last_attempt_at = datetime.now(timezone.utc)
         db.commit()
 
@@ -240,17 +264,70 @@ def _download_episode_assets(
             episode.video_local_path = str(result.path)
             episode.video_size = result.downloaded_bytes
             episode.video_status = AssetStatus.DOWNLOADED if validator.validate_video(target) else AssetStatus.ERROR
+            if episode.video_status == AssetStatus.ERROR:
+                episode.error_message = 'Video validation failed after download'
+                log_task_sync(
+                    db,
+                    level=LogLevel.ERROR,
+                    message=f'Episode {ep_num}: video validation failed',
+                    task_type='download_video',
+                    status='failed',
+                    course_id=course.id,
+                    episode_id=episode.id,
+                    details={'path': str(target)},
+                )
+            else:
+                log_task_sync(
+                    db,
+                    level=LogLevel.INFO,
+                    message=f'Episode {ep_num}: video downloaded',
+                    task_type='download_video',
+                    status='completed',
+                    course_id=course.id,
+                    episode_id=episode.id,
+                    details={'bytes': result.downloaded_bytes},
+                )
         except Exception as exc:
             episode.video_status = AssetStatus.ERROR
             episode.error_message = f'Video download failed: {exc}'
+            log_task_sync(
+                db,
+                level=LogLevel.ERROR,
+                message=f'Episode {ep_num}: video download failed',
+                task_type='download_video',
+                status='failed',
+                course_id=course.id,
+                episode_id=episode.id,
+                details={'error': str(exc), 'url': episode.video_download_url},
+            )
         finally:
             episode.retry_count += 1
             db.commit()
+    elif episode.video_status in {AssetStatus.PENDING, AssetStatus.ERROR}:
+        log_task_sync(
+            db,
+            level=LogLevel.WARNING,
+            message=f'Episode {ep_num}: video URL is missing',
+            task_type='download_video',
+            status='skipped',
+            course_id=course.id,
+            episode_id=episode.id,
+        )
 
     if episode.subtitle_download_url and episode.subtitle_status in {AssetStatus.PENDING, AssetStatus.ERROR}:
+        log_task_sync(
+            db,
+            level=LogLevel.INFO,
+            message=f'Episode {ep_num}: starting subtitle download',
+            task_type='download_subtitle',
+            status='running',
+            course_id=course.id,
+            episode_id=episode.id,
+        )
         filename = clean_filename(episode.subtitle_filename or f'{episode.episode_number or 0:03d}-subtitle.srt')
         target = root / 'subtitles' / 'original' / filename
         episode.subtitle_status = AssetStatus.DOWNLOADING
+        episode.error_message = None
         episode.last_attempt_at = datetime.now(timezone.utc)
         db.commit()
 
@@ -258,17 +335,60 @@ def _download_episode_assets(
             result = engine.download(episode.subtitle_download_url, target, headers=debug_headers)
             episode.subtitle_local_path = str(result.path)
             episode.subtitle_status = AssetStatus.DOWNLOADED if validator.validate_srt(target) else AssetStatus.ERROR
+            if episode.subtitle_status == AssetStatus.ERROR:
+                episode.error_message = 'Subtitle validation failed after download'
+                log_task_sync(
+                    db,
+                    level=LogLevel.ERROR,
+                    message=f'Episode {ep_num}: subtitle validation failed',
+                    task_type='download_subtitle',
+                    status='failed',
+                    course_id=course.id,
+                    episode_id=episode.id,
+                    details={'path': str(target)},
+                )
+            else:
+                log_task_sync(
+                    db,
+                    level=LogLevel.INFO,
+                    message=f'Episode {ep_num}: subtitle downloaded',
+                    task_type='download_subtitle',
+                    status='completed',
+                    course_id=course.id,
+                    episode_id=episode.id,
+                    details={'bytes': result.downloaded_bytes},
+                )
         except Exception as exc:
             episode.subtitle_status = AssetStatus.ERROR
             episode.error_message = f'Subtitle download failed: {exc}'
+            log_task_sync(
+                db,
+                level=LogLevel.ERROR,
+                message=f'Episode {ep_num}: subtitle download failed',
+                task_type='download_subtitle',
+                status='failed',
+                course_id=course.id,
+                episode_id=episode.id,
+                details={'error': str(exc), 'url': episode.subtitle_download_url},
+            )
         finally:
             episode.retry_count += 1
             db.commit()
 
     if episode.exercise_download_url and episode.exercise_status in {AssetStatus.PENDING, AssetStatus.ERROR}:
+        log_task_sync(
+            db,
+            level=LogLevel.INFO,
+            message=f'Episode {ep_num}: starting exercise download',
+            task_type='download_exercise',
+            status='running',
+            course_id=course.id,
+            episode_id=episode.id,
+        )
         filename = clean_filename(episode.exercise_filename or f'{episode.episode_number or 0:03d}-exercise.zip')
         target = root / 'exercises' / filename
         episode.exercise_status = AssetStatus.DOWNLOADING
+        episode.error_message = None
         episode.last_attempt_at = datetime.now(timezone.utc)
         db.commit()
 
@@ -276,9 +396,29 @@ def _download_episode_assets(
             result = engine.download(episode.exercise_download_url, target, headers=debug_headers)
             episode.exercise_local_path = str(result.path)
             episode.exercise_status = AssetStatus.DOWNLOADED
+            log_task_sync(
+                db,
+                level=LogLevel.INFO,
+                message=f'Episode {ep_num}: exercise downloaded',
+                task_type='download_exercise',
+                status='completed',
+                course_id=course.id,
+                episode_id=episode.id,
+                details={'bytes': result.downloaded_bytes},
+            )
         except Exception as exc:
             episode.exercise_status = AssetStatus.ERROR
             episode.error_message = f'Exercise download failed: {exc}'
+            log_task_sync(
+                db,
+                level=LogLevel.ERROR,
+                message=f'Episode {ep_num}: exercise download failed',
+                task_type='download_exercise',
+                status='failed',
+                course_id=course.id,
+                episode_id=episode.id,
+                details={'error': str(exc), 'url': episode.exercise_download_url},
+            )
         finally:
             episode.retry_count += 1
             db.commit()

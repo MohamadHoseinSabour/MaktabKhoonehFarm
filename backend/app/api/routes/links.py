@@ -1,10 +1,12 @@
 import uuid
+from urllib.parse import urlparse
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.core.config import settings
 from app.models.course import Course
 from app.models.download_link_batch import DownloadLinkBatch
 from app.models.episode import Episode
@@ -20,6 +22,8 @@ def add_or_update_links(course_id: uuid.UUID, payload: LinkBatchCreate, db: Sess
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail='Course not found')
+
+    _deduplicate_course_episodes(db, course_id)
 
     parsed = parse_bulk_links(payload.raw_links)
     if not parsed:
@@ -118,8 +122,59 @@ def validate_links(course_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 def _is_url_accessible(url: str) -> bool:
+    headers = {
+        'User-Agent': settings.scraper_user_agent,
+        'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8',
+    }
+    host = (urlparse(url).hostname or '').lower()
+    if host.endswith('git.ir'):
+        headers['Referer'] = 'https://git.ir/'
+
     try:
-        response = requests.head(url, timeout=10, allow_redirects=True)
+        response = requests.head(url, timeout=10, allow_redirects=True, headers=headers)
         return response.status_code < 400
     except requests.RequestException:
         return False
+
+
+def _deduplicate_course_episodes(db: Session, course_id: uuid.UUID) -> None:
+    episodes = (
+        db.query(Episode)
+        .filter(Episode.course_id == course_id, Episode.episode_number.isnot(None))
+        .order_by(Episode.episode_number.asc(), Episode.created_at.asc())
+        .all()
+    )
+    grouped: dict[tuple[int, str], list[Episode]] = {}
+    for ep in episodes:
+        key = (ep.episode_number or 0, (ep.title_en or '').strip().lower())
+        grouped.setdefault(key, []).append(ep)
+
+    changed = False
+    for _key, group in grouped.items():
+        if len(group) <= 1:
+            continue
+
+        primary = max(
+            group,
+            key=lambda ep: int(bool(ep.video_download_url)) + int(bool(ep.subtitle_download_url)) + int(bool(ep.exercise_download_url)),
+        )
+        for candidate in group:
+            if candidate.id == primary.id:
+                continue
+
+            if not primary.video_download_url and candidate.video_download_url:
+                primary.video_download_url = candidate.video_download_url
+                primary.video_filename = primary.video_filename or candidate.video_filename
+            if not primary.subtitle_download_url and candidate.subtitle_download_url:
+                primary.subtitle_download_url = candidate.subtitle_download_url
+                primary.subtitle_filename = primary.subtitle_filename or candidate.subtitle_filename
+                primary.subtitle_language = primary.subtitle_language or candidate.subtitle_language
+            if not primary.exercise_download_url and candidate.exercise_download_url:
+                primary.exercise_download_url = candidate.exercise_download_url
+                primary.exercise_filename = primary.exercise_filename or candidate.exercise_filename
+
+            db.delete(candidate)
+            changed = True
+
+    if changed:
+        db.commit()

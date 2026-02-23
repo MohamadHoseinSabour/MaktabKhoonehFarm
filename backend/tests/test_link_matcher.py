@@ -16,3 +16,45 @@ def test_link_matcher_prefers_exact_filename_match():
 
     matched = matcher._match_episode(link, [ep, other], {1: ep, 2: other}, {ep.video_filename.lower(): ep, other.video_filename.lower(): other})
     assert matched == ep
+
+
+class _FakeQuery:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def all(self):
+        return list(self.rows)
+
+
+class _FakeDB:
+    def __init__(self):
+        self.episodes = []
+
+    def query(self, _model):
+        return _FakeQuery(self.episodes)
+
+    def add(self, episode):
+        self.episodes.append(episode)
+
+    def commit(self):
+        return None
+
+
+def test_link_matcher_creates_single_episode_for_video_and_subtitle():
+    db = _FakeDB()
+    matcher = LinkMatcher(db=db)
+    course_id = uuid.uuid4()
+
+    video = parse_link('https://git.ir/api/post/get-download-links/271xv/?token=t&hash=h&filename=001-Intro-abcd-git.ir.mp4')
+    subtitle = parse_link('https://git.ir/api/post/get-download-links/271xv/?token=t&hash=h&filename=001-Intro-abcd-git.ir.fa.srt')
+
+    result = matcher.apply(course_id=course_id, links=[video, subtitle], apply_changes=True)
+
+    assert result.created == 1
+    assert result.matched == 1
+    assert len(db.episodes) == 1
+    assert db.episodes[0].video_download_url is not None
+    assert db.episodes[0].subtitle_download_url is not None

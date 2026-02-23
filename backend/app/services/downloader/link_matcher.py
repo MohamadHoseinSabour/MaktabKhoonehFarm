@@ -47,6 +47,7 @@ class LinkMatcher:
                 details.append({'url': link.url, 'result': 'matched', 'episode_id': str(target.id)})
                 if apply_changes:
                     self._apply_to_episode(target, link)
+                    self._update_filename_index(by_filename, target)
                 continue
 
             if link.episode_number is None:
@@ -66,6 +67,10 @@ class LinkMatcher:
                 )
                 self._apply_to_episode(new_episode, link)
                 self.db.add(new_episode)
+                episodes.append(new_episode)
+                if new_episode.episode_number is not None and new_episode.episode_number not in by_number:
+                    by_number[new_episode.episode_number] = new_episode
+                self._update_filename_index(by_filename, new_episode)
 
         if apply_changes:
             self.db.commit()
@@ -138,3 +143,8 @@ class LinkMatcher:
             episode.title_en = link.episode_title
         if episode.sort_order == 0 and link.episode_number:
             episode.sort_order = link.episode_number
+
+    def _update_filename_index(self, by_filename: dict, episode: Episode) -> None:
+        for filename in [episode.video_filename, episode.subtitle_filename, episode.exercise_filename]:
+            if filename:
+                by_filename[filename.lower()] = episode

@@ -8,21 +8,32 @@ type Props = {
   courseId: string
 }
 
+type LinkBatchResult = {
+  batch_id?: string | null
+  matched: number
+  created: number
+  unmatched: number
+  duplicates: number
+  details: Array<Record<string, unknown>>
+}
+
 export function LinkManager({ courseId }: Props) {
   const [rawLinks, setRawLinks] = useState('')
-  const [result, setResult] = useState<string | null>(null)
+  const [result, setResult] = useState<LinkBatchResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setLoading(true)
     setResult(null)
+    setError(null)
     try {
       const response = await updateLinks(courseId, rawLinks)
-      setResult(JSON.stringify(response))
+      setResult(response as LinkBatchResult)
       setRawLinks('')
     } catch (error) {
-      setResult((error as Error).message)
+      setError((error as Error).message)
     } finally {
       setLoading(false)
     }
@@ -43,7 +54,29 @@ export function LinkManager({ courseId }: Props) {
           {loading ? 'Parsing...' : 'Apply Link Batch'}
         </button>
       </form>
-      {result && <pre className="console">{result}</pre>}
+      {error && <pre className="console">{error}</pre>}
+      {result && (
+        <section className="link-result stack">
+          <div className="row">
+            <span className="badge badge-downloaded">Matched: {result.matched}</span>
+            <span className="badge badge-processed">Created: {result.created}</span>
+            <span className="badge badge-error">Unmatched: {result.unmatched}</span>
+            <span className="badge badge-muted">Duplicates: {result.duplicates}</span>
+          </div>
+          <details>
+            <summary>Show parsed details ({result.details.length})</summary>
+            <pre className="console">
+              {JSON.stringify(
+                result.details.length > 80
+                  ? [...result.details.slice(0, 80), { info: `truncated ${result.details.length - 80} more rows` }]
+                  : result.details,
+                null,
+                2
+              )}
+            </pre>
+          </details>
+        </section>
+      )}
     </section>
   )
 }
