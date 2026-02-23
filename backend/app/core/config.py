@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', case_sensitive=False)
+    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', case_sensitive=False, extra='ignore')
 
     app_name: str = 'ACMS'
     api_v1_prefix: str = '/api'
@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     database_url: str = 'postgresql+psycopg://acms:password@db:5432/acms_db'
     redis_url: str = 'redis://redis:6379/0'
     secret_key: str = Field(default='change-me', min_length=8)
+    allowed_hosts: str = 'localhost,127.0.0.1'
 
     storage_path: str = '/app/storage'
     max_storage_gb: int = 500

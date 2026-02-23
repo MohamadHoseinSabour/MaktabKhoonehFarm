@@ -1,5 +1,6 @@
 import re
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -11,6 +12,12 @@ from app.services.scraper.base_scraper import BaseScraper, ScrapedCourseData
 from app.services.scraper.utils import detect_platform_from_url, normalize_whitespace, parse_float, parse_int
 
 logger = get_logger('scraper.gitir')
+
+ACCESS_RESTRICTION_PATTERNS = [
+    re.compile(r'محدودیت\s*دسترسی', re.IGNORECASE),
+    re.compile(r'access\s*denied', re.IGNORECASE),
+    re.compile(r'forbidden', re.IGNORECASE),
+]
 
 
 class GitIRScraper(BaseScraper):
@@ -36,7 +43,7 @@ class GitIRScraper(BaseScraper):
         html = self._fetch(url)
         soup = BeautifulSoup(html, 'lxml')
 
-        title = self._find_first_text(
+        raw_title = self._find_first_text(
             soup,
             [
                 'h1.entry-title',
@@ -45,6 +52,15 @@ class GitIRScraper(BaseScraper):
                 'article h1',
             ],
         )
+        meta_title = self._meta_content(soup, ['og:title', 'twitter:title']) or (
+            normalize_whitespace(soup.title.get_text(' ', strip=True)) if soup.title else None
+        )
+        title = raw_title
+        access_limited = self._is_access_restricted(raw_title)
+        if access_limited and meta_title:
+            title = meta_title
+        if not title:
+            title = meta_title
 
         image_url = self._find_image_url(
             soup,
@@ -54,8 +70,11 @@ class GitIRScraper(BaseScraper):
                 'article img',
             ],
         )
+        meta_image = self._meta_content(soup, ['og:image', 'twitter:image'])
+        if not image_url and meta_image:
+            image_url = urljoin(url, meta_image)
 
-        description = self._find_first_text(
+        raw_description = self._find_first_text(
             soup,
             [
                 '.entry-content',
@@ -63,12 +82,25 @@ class GitIRScraper(BaseScraper):
                 'article .content',
             ],
         )
+        meta_description = self._meta_content(soup, ['og:description', 'twitter:description', 'description'])
+        description = raw_description
+        if self._is_access_restricted(raw_description) and meta_description:
+            description = meta_description
+        if not description:
+            description = meta_description
 
         metadata = self._extract_metadata(soup)
+        metadata['access_limited'] = access_limited
         episodes = self._extract_curriculum(soup)
 
+        title_en = title
+        title_fa = None
+        if title and re.search(r'[\u0600-\u06FF]', title):
+            title_fa = title
+
         return ScrapedCourseData(
-            title_en=title,
+            title_en=title_en,
+            title_fa=title_fa,
             description_en=description,
             thumbnail_url=image_url,
             instructor=metadata.get('instructor'),
@@ -136,6 +168,23 @@ class GitIRScraper(BaseScraper):
         metadata['tags'] = tags
 
         return metadata
+
+    def _meta_content(self, soup: BeautifulSoup, names: list[str]) -> str | None:
+        for name in names:
+            tag = soup.find('meta', attrs={'property': name}) or soup.find('meta', attrs={'name': name})
+            if tag and tag.get('content'):
+                text = normalize_whitespace(tag['content'])
+                if text:
+                    return text
+        return None
+
+    def _is_access_restricted(self, value: str | None) -> bool:
+        if not value:
+            return False
+        for pattern in ACCESS_RESTRICTION_PATTERNS:
+            if pattern.search(value):
+                return True
+        return False
 
     def _extract_curriculum(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         episodes: list[dict[str, Any]] = []

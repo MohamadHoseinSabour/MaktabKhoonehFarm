@@ -7,9 +7,11 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.models.course import Course
 from app.models.episode import Episode
-from app.models.enums import AssetStatus, CourseStatus
+from app.models.enums import AssetStatus, CourseStatus, LogLevel
 from app.schemas.course import CourseCreate, CourseDetailOut, CourseOut, CourseUpdate, ToggleDebugResponse
-from app.services.course_service import course_storage_root
+from app.services.course_service import course_storage_root, scrape_course_metadata
+from app.services.task_dispatcher import celery_worker_available
+from app.services.task_logger import log_task_sync
 from app.tasks.course_tasks import scrape_course_task
 
 router = APIRouter()
@@ -19,6 +21,10 @@ router = APIRouter()
 def create_course(payload: CourseCreate, db: Session = Depends(get_db)):
     existing = db.query(Course).filter(Course.source_url == str(payload.source_url)).first()
     if existing:
+        existing.debug_mode = payload.debug_mode
+        db.commit()
+        _dispatch_scrape(db, existing)
+        db.refresh(existing)
         return existing
 
     course = Course(source_url=str(payload.source_url), debug_mode=payload.debug_mode, status=CourseStatus.SCRAPING)
@@ -26,7 +32,8 @@ def create_course(payload: CourseCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(course)
 
-    scrape_course_task.delay(str(course.id))
+    _dispatch_scrape(db, course)
+    db.refresh(course)
     return course
 
 
@@ -89,7 +96,7 @@ def scrape_course(course_id: uuid.UUID, db: Session = Depends(get_db)):
     if not course:
         raise HTTPException(status_code=404, detail='Course not found')
 
-    scrape_course_task.delay(str(course.id))
+    _dispatch_scrape(db, course)
     db.refresh(course)
     return course
 
@@ -128,3 +135,48 @@ def retry_all_failed(course_id: uuid.UUID, db: Session = Depends(get_db)):
 
     db.commit()
     return {'retried': retried}
+
+
+def _dispatch_scrape(db: Session, course: Course) -> None:
+    if celery_worker_available():
+        task = scrape_course_task.delay(str(course.id))
+        log_task_sync(
+            db,
+            level=LogLevel.INFO,
+            message='Scrape task queued',
+            task_type='scrape',
+            status='queued',
+            course_id=course.id,
+            details={'task_id': task.id},
+        )
+        return
+
+    log_task_sync(
+        db,
+        level=LogLevel.WARNING,
+        message='No Celery worker detected; scraping is running synchronously.',
+        task_type='scrape',
+        status='running',
+        course_id=course.id,
+    )
+    try:
+        scrape_course_metadata(db, course)
+        log_task_sync(
+            db,
+            level=LogLevel.INFO,
+            message='Course scraped successfully (sync fallback)',
+            task_type='scrape',
+            status='completed',
+            course_id=course.id,
+        )
+    except Exception as exc:
+        course.status = CourseStatus.ERROR
+        db.commit()
+        log_task_sync(
+            db,
+            level=LogLevel.ERROR,
+            message=f'Scrape failed (sync fallback): {exc}',
+            task_type='scrape',
+            status='failed',
+            course_id=course.id,
+        )
