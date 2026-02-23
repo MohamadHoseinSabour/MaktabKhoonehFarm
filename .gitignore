@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.venv/
+
+# Environments
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# Storage artifacts
+storage/courses/
+
+# Database artifacts
+*.db
+
+# Node
+frontend/node_modules/
+frontend/.next/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
