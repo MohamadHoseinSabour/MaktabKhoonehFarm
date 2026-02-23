@@ -1,14 +1,19 @@
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 from slugify import slugify
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.models.course import Course
 from app.models.episode import Episode
 from app.models.enums import CourseStatus
 from app.services.scraper.gitir_scraper import GitIRScraper
+
+logger = get_logger('service.course')
 
 
 def ensure_course_slug(course: Course) -> str:
@@ -55,7 +60,10 @@ def scrape_course_metadata(db: Session, course: Course) -> Course:
     course.status = CourseStatus.SCRAPED
 
     ensure_course_slug(course)
-    course_storage_root(course)
+    root = course_storage_root(course)
+    thumbnail_local = _download_course_thumbnail(data.thumbnail_url, root)
+    if thumbnail_local:
+        course.thumbnail_local = thumbnail_local
 
     existing_numbers = {
         number
@@ -82,6 +90,35 @@ def scrape_course_metadata(db: Session, course: Course) -> Course:
     db.commit()
     db.refresh(course)
     return course
+
+
+def _download_course_thumbnail(url: str | None, root: Path) -> str | None:
+    if not url:
+        return None
+
+    parsed = urlparse(url)
+    extension = Path(parsed.path).suffix.lower()
+    if extension not in {'.jpg', '.jpeg', '.png', '.webp'}:
+        extension = '.jpg'
+
+    target = root / 'thumbnail' / f'poster{extension}'
+    headers = {
+        'User-Agent': settings.scraper_user_agent,
+        'Accept': 'image/*,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8',
+    }
+    if (parsed.hostname or '').lower().endswith('git.ir'):
+        headers['Referer'] = 'https://git.ir/'
+
+    try:
+        with httpx.Client(timeout=settings.request_timeout_seconds, follow_redirects=True) as client:
+            response = client.get(url, headers=headers)
+            response.raise_for_status()
+            target.write_bytes(response.content)
+            return str(target)
+    except Exception as exc:
+        logger.warning('Thumbnail download failed for %s: %s', url, exc)
+        return None
 
 
 def calculate_course_progress(course: Course, episodes: list[Episode]) -> dict:

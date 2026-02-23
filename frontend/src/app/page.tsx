@@ -21,7 +21,11 @@ export default function DashboardPage() {
       }
     }
 
-    load()
+    void load()
+    const timer = setInterval(() => {
+      void load()
+    }, 5000)
+    return () => clearInterval(timer)
   }, [])
 
   return (

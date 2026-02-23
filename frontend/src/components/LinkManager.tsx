@@ -6,6 +6,7 @@ import { updateLinks } from '@/services/api'
 
 type Props = {
   courseId: string
+  showExpiredNotice?: boolean
 }
 
 type LinkBatchResult = {
@@ -17,7 +18,7 @@ type LinkBatchResult = {
   details: Array<Record<string, unknown>>
 }
 
-export function LinkManager({ courseId }: Props) {
+export function LinkManager({ courseId, showExpiredNotice = false }: Props) {
   const [rawLinks, setRawLinks] = useState('')
   const [result, setResult] = useState<LinkBatchResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -40,8 +41,11 @@ export function LinkManager({ courseId }: Props) {
   }
 
   return (
-    <section className="panel">
+    <section className="panel stack" id="link-manager">
       <h3>Refresh Links</h3>
+      {showExpiredNotice && (
+        <p className="operation-banner warn">Download links expired. Paste a fresh link batch to continue downloads.</p>
+      )}
       <form onSubmit={submit} className="stack">
         <textarea
           value={rawLinks}

@@ -1,5 +1,19 @@
+from pathlib import Path
+
 from pydantic import Field
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+if (BACKEND_ROOT.parent / 'backend').exists() and (BACKEND_ROOT.parent / 'frontend').exists():
+    PROJECT_ROOT = BACKEND_ROOT.parent
+else:
+    PROJECT_ROOT = BACKEND_ROOT
+
+
+def default_storage_path() -> str:
+    return str((PROJECT_ROOT / 'storage').resolve())
 
 
 class Settings(BaseSettings):
@@ -15,7 +29,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(default='change-me', min_length=8)
     allowed_hosts: str = 'localhost,127.0.0.1'
 
-    storage_path: str = '/app/storage'
+    storage_path: str = Field(default_factory=default_storage_path)
     max_storage_gb: int = 500
 
     max_concurrent_downloads: int = 3
@@ -40,6 +54,14 @@ class Settings(BaseSettings):
     telegram_chat_id: str | None = None
 
     next_public_api_base_url: str = 'http://localhost:8000'
+
+    @field_validator('storage_path')
+    @classmethod
+    def resolve_storage_path(cls, value: str) -> str:
+        path = Path(value)
+        if path.is_absolute():
+            return str(path)
+        return str((PROJECT_ROOT / path).resolve())
 
 
 settings = Settings()

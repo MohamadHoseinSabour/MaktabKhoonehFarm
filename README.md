@@ -35,4 +35,4 @@ Run backend tests:
 ## Notes
 - AI keys are encrypted at rest (`ai_configs.api_key`).
 - Debug mode limits download pipeline to first episode.
-- Storage path layout follows `/storage/courses/{course_slug}/...`.
+- Storage path layout is inside project `storage/`, e.g. `storage/courses/{course_slug}/...`.

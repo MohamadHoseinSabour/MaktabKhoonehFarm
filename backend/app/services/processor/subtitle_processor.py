@@ -13,6 +13,7 @@ class SubtitleProcessingConfig:
     ad_patterns: list[str] = field(
         default_factory=lambda: [
             r'git\.ir',
+            r'ترجمه\s+با\s+هوش\s+مصنوعی\s+توسط\s*git\.ir',
             r'downloaded\s+from',
             r'translat(or|ed)\s+by',
         ]
@@ -21,6 +22,7 @@ class SubtitleProcessingConfig:
     remove_html_tags: bool = True
     renumber_entries: bool = True
     fix_overlap: bool = True
+    shift_seconds: float = 10.0
 
 
 class SubtitleProcessor:
@@ -38,6 +40,8 @@ class SubtitleProcessor:
         if self.config.fix_overlap:
             self._fix_overlaps(cleaned)
 
+        self._shift_timestamps(cleaned)
+
         if self.config.renumber_entries:
             for index, item in enumerate(cleaned, start=1):
                 item.index = index
@@ -49,6 +53,7 @@ class SubtitleProcessor:
             'input_encoding': encoding,
             'input_count': len(subtitles),
             'output_count': len(cleaned),
+            'shift_seconds': self.config.shift_seconds,
         }
 
     def _detect_encoding(self, payload: bytes) -> str:
@@ -82,9 +87,8 @@ class SubtitleProcessor:
         return result
 
     def _is_advertisement(self, line: str) -> bool:
-        lower = line.lower()
         for pattern in self.config.ad_patterns:
-            if re.search(pattern, lower):
+            if re.search(pattern, line, flags=re.IGNORECASE):
                 return True
         return False
 
@@ -96,3 +100,17 @@ class SubtitleProcessor:
                 adjusted = next_item.start - timedelta(milliseconds=1)
                 if adjusted > current.start:
                     current.end = adjusted
+
+    def _shift_timestamps(self, subtitles: list[srt.Subtitle]) -> None:
+        shift = timedelta(seconds=self.config.shift_seconds)
+        if shift.total_seconds() == 0:
+            return
+
+        for item in subtitles:
+            item.start = item.start + shift
+            item.end = item.end + shift
+
+            if item.start < timedelta(0):
+                item.start = timedelta(0)
+            if item.end <= item.start:
+                item.end = item.start + timedelta(milliseconds=1)

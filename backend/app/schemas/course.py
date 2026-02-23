@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
 
 from app.models.enums import CourseStatus
 from app.schemas.common import ORMBaseModel
@@ -29,9 +29,14 @@ class CourseOut(ORMBaseModel):
     slug: str | None
     title_en: str | None
     title_fa: str | None
+    description_en: str | None
+    description_fa: str | None
+    thumbnail_url: str | None
+    thumbnail_local: str | None
     instructor: str | None
     source_platform: str | None
     lectures_count: int | None
+    extra_metadata: dict[str, object] = Field(default_factory=dict)
     status: CourseStatus
     debug_mode: bool
     created_at: datetime
@@ -39,10 +44,6 @@ class CourseOut(ORMBaseModel):
 
 
 class CourseDetailOut(CourseOut):
-    description_en: str | None
-    description_fa: str | None
-    thumbnail_url: str | None
-    thumbnail_local: str | None
     tags: list[str]
     duration: str | None
     level: str | None

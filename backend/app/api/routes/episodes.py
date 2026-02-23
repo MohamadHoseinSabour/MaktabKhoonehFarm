@@ -13,6 +13,11 @@ from app.schemas.episode import EpisodeOut, EpisodeUpdate
 from app.services.course_service import course_storage_root
 from app.services.downloader.engine import DownloadEngine
 from app.services.downloader.file_validator import FileValidator
+from app.services.downloader.link_expiry import (
+    build_download_error_message,
+    is_expired_link_error,
+    mark_course_links_expired,
+)
 from app.services.processor.file_cleaner import clean_filename
 from app.services.processor.subtitle_processor import SubtitleProcessor
 from app.services.task_logger import log_task_sync
@@ -79,7 +84,7 @@ def download_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db)
     engine = DownloadEngine()
     validator = FileValidator()
 
-    result = _download_episode_assets(db, episode, root, engine, validator)
+    result = _download_episode_assets(db, course, episode, root, engine, validator)
     return {'episode_id': str(episode.id), 'result': result}
 
 
@@ -158,6 +163,7 @@ def upload_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db)):
 
 def _download_episode_assets(
     db: Session,
+    course: Course,
     episode: Episode,
     root: Path,
     engine: DownloadEngine,
@@ -180,7 +186,21 @@ def _download_episode_assets(
             result['video'] = episode.video_status.value
         except Exception as exc:
             episode.video_status = AssetStatus.ERROR
-            episode.error_message = f'Video download failed: {exc}'
+            expired = is_expired_link_error(exc, episode.video_download_url)
+            episode.error_message = build_download_error_message('Video', exc, episode.video_download_url)
+            if expired:
+                first_time = mark_course_links_expired(course)
+                if first_time:
+                    log_task_sync(
+                        db,
+                        level=LogLevel.WARNING,
+                        message='Download links have expired. Please provide a fresh link batch in Refresh Links.',
+                        task_type='links',
+                        status='expired',
+                        course_id=course.id,
+                        episode_id=episode.id,
+                        details={'asset_type': 'video', 'url': episode.video_download_url, 'error': str(exc)},
+                    )
             result['video'] = 'error'
         finally:
             episode.retry_count += 1
@@ -200,7 +220,21 @@ def _download_episode_assets(
             result['subtitle'] = episode.subtitle_status.value
         except Exception as exc:
             episode.subtitle_status = AssetStatus.ERROR
-            episode.error_message = f'Subtitle download failed: {exc}'
+            expired = is_expired_link_error(exc, episode.subtitle_download_url)
+            episode.error_message = build_download_error_message('Subtitle', exc, episode.subtitle_download_url)
+            if expired:
+                first_time = mark_course_links_expired(course)
+                if first_time:
+                    log_task_sync(
+                        db,
+                        level=LogLevel.WARNING,
+                        message='Download links have expired. Please provide a fresh link batch in Refresh Links.',
+                        task_type='links',
+                        status='expired',
+                        course_id=course.id,
+                        episode_id=episode.id,
+                        details={'asset_type': 'subtitle', 'url': episode.subtitle_download_url, 'error': str(exc)},
+                    )
             result['subtitle'] = 'error'
         finally:
             episode.retry_count += 1
@@ -220,7 +254,21 @@ def _download_episode_assets(
             result['exercise'] = episode.exercise_status.value
         except Exception as exc:
             episode.exercise_status = AssetStatus.ERROR
-            episode.error_message = f'Exercise download failed: {exc}'
+            expired = is_expired_link_error(exc, episode.exercise_download_url)
+            episode.error_message = build_download_error_message('Exercise', exc, episode.exercise_download_url)
+            if expired:
+                first_time = mark_course_links_expired(course)
+                if first_time:
+                    log_task_sync(
+                        db,
+                        level=LogLevel.WARNING,
+                        message='Download links have expired. Please provide a fresh link batch in Refresh Links.',
+                        task_type='links',
+                        status='expired',
+                        course_id=course.id,
+                        episode_id=episode.id,
+                        details={'asset_type': 'exercise', 'url': episode.exercise_download_url, 'error': str(exc)},
+                    )
             result['exercise'] = 'error'
         finally:
             episode.retry_count += 1

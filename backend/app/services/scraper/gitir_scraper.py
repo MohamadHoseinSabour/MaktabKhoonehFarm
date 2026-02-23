@@ -18,6 +18,8 @@ ACCESS_RESTRICTION_PATTERNS = [
     re.compile(r'access\s*denied', re.IGNORECASE),
     re.compile(r'forbidden', re.IGNORECASE),
 ]
+PERSIAN_CHAR_RE = re.compile(r'[\u0600-\u06FF]')
+LATIN_CHAR_RE = re.compile(r'[A-Za-z]')
 
 
 class GitIRScraper(BaseScraper):
@@ -70,24 +72,27 @@ class GitIRScraper(BaseScraper):
                 'article img',
             ],
         )
+        if image_url:
+            image_url = urljoin(url, image_url)
         meta_image = self._meta_content(soup, ['og:image', 'twitter:image'])
         if not image_url and meta_image:
             image_url = urljoin(url, meta_image)
 
-        raw_description = self._find_first_text(
+        description_node = self._find_first_node(
             soup,
-            [
-                '.entry-content',
-                '.post-content',
-                'article .content',
-            ],
+            ['.entry-content', '.post-content', 'article .content'],
         )
+        raw_description = normalize_whitespace(description_node.get_text(' ', strip=True)) if description_node else None
         meta_description = self._meta_content(soup, ['og:description', 'twitter:description', 'description'])
-        description = raw_description
+        description_en, description_fa = self._extract_bilingual_descriptions(
+            description_node,
+            raw_description,
+            meta_description,
+        )
+
         if self._is_access_restricted(raw_description) and meta_description:
-            description = meta_description
-        if not description:
-            description = meta_description
+            description_en = meta_description
+            description_fa = meta_description if self._contains_persian(meta_description) else description_fa
 
         metadata = self._extract_metadata(soup)
         metadata['access_limited'] = access_limited
@@ -95,13 +100,18 @@ class GitIRScraper(BaseScraper):
 
         title_en = title
         title_fa = None
-        if title and re.search(r'[\u0600-\u06FF]', title):
+        if title and self._contains_persian(title):
             title_fa = title
+            if meta_title and not self._contains_persian(meta_title):
+                title_en = meta_title
+        elif meta_title and self._contains_persian(meta_title):
+            title_fa = meta_title
 
         return ScrapedCourseData(
             title_en=title_en,
             title_fa=title_fa,
-            description_en=description,
+            description_en=description_en,
+            description_fa=description_fa,
             thumbnail_url=image_url,
             instructor=metadata.get('instructor'),
             category=metadata.get('category'),
@@ -125,6 +135,13 @@ class GitIRScraper(BaseScraper):
                 text = normalize_whitespace(element.get_text(' ', strip=True))
                 if text:
                     return text
+        return None
+
+    def _find_first_node(self, soup: BeautifulSoup, selectors: list[str]):
+        for selector in selectors:
+            element = soup.select_one(selector)
+            if element:
+                return element
         return None
 
     def _find_image_url(self, soup: BeautifulSoup, selectors: list[str]) -> str | None:
@@ -185,6 +202,56 @@ class GitIRScraper(BaseScraper):
             if pattern.search(value):
                 return True
         return False
+
+    def _contains_persian(self, value: str | None) -> bool:
+        if not value:
+            return False
+        return bool(PERSIAN_CHAR_RE.search(value))
+
+    def _extract_bilingual_descriptions(
+        self,
+        description_node,
+        raw_description: str | None,
+        meta_description: str | None,
+    ) -> tuple[str | None, str | None]:
+        blocks: list[str] = []
+        if description_node:
+            for node in description_node.select('p, li'):
+                text = normalize_whitespace(node.get_text(' ', strip=True))
+                if len(text) >= 40:
+                    blocks.append(text)
+
+        if not blocks and raw_description:
+            blocks = [raw_description]
+
+        unique_blocks: list[str] = []
+        seen: set[str] = set()
+        for block in blocks:
+            key = block.strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique_blocks.append(block)
+
+        fa_blocks: list[str] = []
+        en_blocks: list[str] = []
+        for block in unique_blocks:
+            persian_count = len(PERSIAN_CHAR_RE.findall(block))
+            latin_count = len(LATIN_CHAR_RE.findall(block))
+            if persian_count > 0 and persian_count >= latin_count:
+                fa_blocks.append(block)
+            if latin_count > 0 and latin_count >= persian_count:
+                en_blocks.append(block)
+
+        description_en = normalize_whitespace(' '.join(en_blocks[:6])) if en_blocks else None
+        description_fa = normalize_whitespace(' '.join(fa_blocks[:6])) if fa_blocks else None
+
+        if not description_en:
+            description_en = meta_description or raw_description
+        if not description_fa and raw_description and self._contains_persian(raw_description):
+            description_fa = raw_description
+
+        return description_en, description_fa
 
     def _extract_curriculum(self, soup: BeautifulSoup) -> list[dict[str, Any]]:
         episodes: list[dict[str, Any]] = []

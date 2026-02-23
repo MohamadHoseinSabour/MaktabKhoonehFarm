@@ -8,7 +8,7 @@ import { createCourse, getCourses, Course } from '@/services/api'
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([])
   const [sourceUrl, setSourceUrl] = useState('')
-  const [debugMode, setDebugMode] = useState(false)
+  const [debugMode, setDebugMode] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -23,7 +23,12 @@ export default function CoursesPage() {
   }
 
   useEffect(() => {
-    load()
+    void load()
+    const timer = setInterval(() => {
+      void load()
+    }, 5000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const submit = async (event: FormEvent) => {

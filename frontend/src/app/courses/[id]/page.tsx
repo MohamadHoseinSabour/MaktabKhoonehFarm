@@ -30,6 +30,7 @@ function toWsUrl(base: string, courseId: string) {
 
 type GlobalAction = 'toggle_debug' | 'start_download' | 'process_subtitles' | 'ai_translate'
 type EpisodeAction = 'download' | 'process' | 'upload' | 'retry'
+const EXPIRED_LINK_PREFIX = 'LINK_EXPIRED:'
 
 function episodeCurrentOperation(episode: { video_status: string; subtitle_status: string; exercise_status: string }) {
   if (episode.video_status === 'downloading') return 'Downloading video'
@@ -132,6 +133,19 @@ export default function CourseDetailPage() {
     return course.episodes.find((episode) => episodeCurrentOperation(episode)) ?? null
   }, [course])
 
+  const hasExpiredLinks = useMemo(() => {
+    if (!course) return false
+
+    const flag = course.extra_metadata?.links_expired
+    if (flag === true) return true
+
+    return course.episodes.some((episode) => (episode.error_message ?? '').startsWith(EXPIRED_LINK_PREFIX))
+  }, [course])
+
+  const jumpToLinkManager = () => {
+    document.getElementById('link-manager')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   if (loading) {
     return <p>Loading...</p>
   }
@@ -205,7 +219,20 @@ export default function CourseDetailPage() {
         {error && <p>{error}</p>}
       </section>
 
-      <LinkManager courseId={courseId} />
+      {hasExpiredLinks && (
+        <section className="panel stack">
+          <p className="operation-banner warn">
+            Download links have expired. Please paste a fresh link batch, then start download again.
+          </p>
+          <div className="row">
+            <button type="button" className="btn warn" onClick={jumpToLinkManager}>
+              Paste New Links
+            </button>
+          </div>
+        </section>
+      )}
+
+      <LinkManager courseId={courseId} showExpiredNotice={hasExpiredLinks} />
 
       <section className="panel stack">
         <h3>Episodes</h3>

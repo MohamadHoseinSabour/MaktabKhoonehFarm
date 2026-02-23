@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models.episode import Episode
 from app.models.enums import AssetStatus
+from app.services.downloader.link_expiry import EXPIRED_LINK_ERROR_PREFIX
 from app.services.downloader.link_parser import ParsedLink
 
 
@@ -143,6 +144,8 @@ class LinkMatcher:
             episode.title_en = link.episode_title
         if episode.sort_order == 0 and link.episode_number:
             episode.sort_order = link.episode_number
+        if episode.error_message and episode.error_message.startswith(EXPIRED_LINK_ERROR_PREFIX):
+            episode.error_message = None
 
     def _update_filename_index(self, by_filename: dict, episode: Episode) -> None:
         for filename in [episode.video_filename, episode.subtitle_filename, episode.exercise_filename]:

@@ -11,6 +11,7 @@ from app.models.course import Course
 from app.models.download_link_batch import DownloadLinkBatch
 from app.models.episode import Episode
 from app.schemas.link import LinkBatchCreate, LinkBatchResult, LinkValidationResult
+from app.services.downloader.link_expiry import clear_course_links_expired
 from app.services.downloader.link_matcher import LinkMatcher
 from app.services.downloader.link_parser import parse_bulk_links
 
@@ -43,6 +44,8 @@ def add_or_update_links(course_id: uuid.UUID, payload: LinkBatchCreate, db: Sess
     result = matcher.apply(course_id=course_id, links=parsed, apply_changes=payload.apply_changes)
 
     if payload.apply_changes:
+        if result.matched > 0 or result.created > 0:
+            clear_course_links_expired(course)
         db.add(batch)
         db.commit()
         db.refresh(batch)

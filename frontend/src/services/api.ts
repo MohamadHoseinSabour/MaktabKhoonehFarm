@@ -28,9 +28,14 @@ export type Course = {
   slug?: string | null
   title_en?: string | null
   title_fa?: string | null
+  description_en?: string | null
+  description_fa?: string | null
+  thumbnail_url?: string | null
+  thumbnail_local?: string | null
   instructor?: string | null
   source_platform?: string | null
   lectures_count?: number | null
+  extra_metadata?: Record<string, unknown> | null
   status: string
   debug_mode: boolean
   created_at: string
@@ -42,12 +47,20 @@ export type Episode = {
   episode_number?: number | null
   title_en?: string | null
   title_fa?: string | null
+  video_download_url?: string | null
+  video_local_path?: string | null
   video_status: string
+  subtitle_download_url?: string | null
+  subtitle_local_path?: string | null
   subtitle_status: string
+  exercise_download_url?: string | null
+  exercise_local_path?: string | null
   exercise_status: string
   video_filename?: string | null
   subtitle_filename?: string | null
   exercise_filename?: string | null
+  subtitle_processed_path?: string | null
+  error_message?: string | null
 }
 
 export type DashboardStats = {
@@ -83,7 +96,7 @@ export async function getCourse(id: string) {
   return request<Course & { episodes: Episode[]; description_en?: string; description_fa?: string }>(`/api/courses/${id}/`)
 }
 
-export async function createCourse(sourceUrl: string, debugMode = false) {
+export async function createCourse(sourceUrl: string, debugMode = true) {
   return request<Course>('/api/courses/', {
     method: 'POST',
     body: JSON.stringify({ source_url: sourceUrl, debug_mode: debugMode }),
