@@ -10,7 +10,7 @@ from app.schemas.episode import EpisodeOut
 
 class CourseCreate(BaseModel):
     source_url: HttpUrl
-    debug_mode: bool = False
+    debug_mode: bool = True
 
 
 class CourseUpdate(BaseModel):
