@@ -47,7 +47,7 @@ class SubtitleProcessor:
                 item.index = index
 
         destination_path.parent.mkdir(parents=True, exist_ok=True)
-        destination_path.write_text(srt.compose(cleaned), encoding='utf-8')
+        destination_path.write_text(self._compose_vtt(cleaned), encoding='utf-8')
 
         return {
             'input_encoding': encoding,
@@ -55,6 +55,23 @@ class SubtitleProcessor:
             'output_count': len(cleaned),
             'shift_seconds': self.config.shift_seconds,
         }
+
+    def _compose_vtt(self, subtitles: list[srt.Subtitle]) -> str:
+        lines = ['WEBVTT', '']
+        for item in subtitles:
+            start = self._format_vtt_timestamp(item.start)
+            end = self._format_vtt_timestamp(item.end)
+            lines.append(f'{start} --> {end}')
+            lines.extend(item.content.splitlines())
+            lines.append('')
+        return '\n'.join(lines).rstrip() + '\n'
+
+    def _format_vtt_timestamp(self, value: timedelta) -> str:
+        total_ms = max(0, int(round(value.total_seconds() * 1000)))
+        hours, rem = divmod(total_ms, 3_600_000)
+        minutes, rem = divmod(rem, 60_000)
+        seconds, ms = divmod(rem, 1000)
+        return f'{hours:02d}:{minutes:02d}:{seconds:02d}.{ms:03d}'
 
     def _detect_encoding(self, payload: bytes) -> str:
         guess = chardet.detect(payload)

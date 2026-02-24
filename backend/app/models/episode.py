@@ -2,8 +2,7 @@ import uuid
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -13,8 +12,8 @@ from app.models.enums import AssetStatus
 class Episode(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = 'episodes'
 
-    course_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('courses.id', ondelete='CASCADE'), nullable=False)
-    section_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('sections.id', ondelete='SET NULL'))
+    course_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey('courses.id', ondelete='CASCADE'), nullable=False)
+    section_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey('sections.id', ondelete='SET NULL'))
 
     episode_number: Mapped[int | None] = mapped_column(Integer)
     title_en: Mapped[str | None] = mapped_column(String(500))

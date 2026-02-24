@@ -183,7 +183,7 @@ def process_subtitles_task(self, course_id: str):
             if not src.exists():
                 continue
 
-            dst = root / 'subtitles' / 'processed' / src.name
+            dst = root / 'subtitles' / 'processed' / f'{src.stem}.vtt'
             episode.subtitle_status = AssetStatus.PROCESSING
             db.commit()
 

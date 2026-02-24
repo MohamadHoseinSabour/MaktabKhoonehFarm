@@ -125,6 +125,16 @@ p {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
+.course-card.upload-success {
+  background: #e5e7eb;
+  border-color: #9ca3af;
+}
+
+.course-card.upload-failed {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
 .course-thumb {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -177,6 +187,24 @@ p {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.upload-state {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.upload-state-success {
+  color: #374151;
+}
+
+.upload-state-error {
+  color: #b91c1c;
+}
+
+.upload-counter {
+  font-size: 0.8rem;
+  color: #475569;
 }
 
 .badge {
@@ -410,6 +438,56 @@ select {
   word-break: break-word;
 }
 
+.ai-content h4 {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.bullet-list {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+}
+
+.overview-text {
+  white-space: pre-line;
+  line-height: 1.95;
+  text-align: justify;
+}
+
+.copy-hint {
+  color: var(--muted);
+}
+
+.html-copy-box {
+  border: 1px dashed #94a3b8;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.75rem;
+  cursor: copy;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.html-copy-box:focus {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+.html-copy-box pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  direction: ltr;
+  text-align: left;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
 .online { color: #15803d; }
 .offline { color: #b91c1c; }
 
@@ -436,6 +514,22 @@ select {
   color: var(--text);
   text-decoration: none;
   font-weight: 600;
+}
+
+.admin-course-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.admin-course-item span {
+  font-size: 0.82rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 @keyframes pulse {

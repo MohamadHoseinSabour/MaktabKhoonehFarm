@@ -16,16 +16,25 @@ def default_storage_path() -> str:
     return str((PROJECT_ROOT / 'storage').resolve())
 
 
+def default_database_url() -> str:
+    return f"sqlite:///{(PROJECT_ROOT / 'storage' / 'acms.db').resolve().as_posix()}"
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', case_sensitive=False, extra='ignore')
+    model_config = SettingsConfigDict(
+        env_file=str((PROJECT_ROOT / '.env').resolve()),
+        env_file_encoding='utf-8',
+        case_sensitive=False,
+        extra='ignore',
+    )
 
     app_name: str = 'ACMS'
     api_v1_prefix: str = '/api'
     debug: bool = False
     log_level: str = 'INFO'
 
-    database_url: str = 'postgresql+psycopg://acms:password@db:5432/acms_db'
-    redis_url: str = 'redis://redis:6379/0'
+    database_url: str = Field(default_factory=default_database_url)
+    redis_url: str = 'redis://localhost:6379/0'
     secret_key: str = Field(default='change-me', min_length=8)
     allowed_hosts: str = 'localhost,127.0.0.1'
 

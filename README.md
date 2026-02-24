@@ -5,15 +5,27 @@ Phase-1 scaffold for course scraping, link management, download/processing pipel
 ## Stack
 - Backend: FastAPI + SQLAlchemy + Celery + Redis
 - Frontend: Next.js (App Router, TypeScript)
-- Database: PostgreSQL
-- Infra: Docker Compose
+- Database: SQLite (default) or PostgreSQL
 
 ## Quick Start
 1. Create env file:
    - `cp .env.example .env`
-2. Run containers:
-   - `docker compose up --build`
-3. Open:
+2. Backend setup:
+   - `cd backend`
+   - `python -m venv .venv`
+   - `.venv\Scripts\activate` (Windows)
+   - `pip install -r requirements.txt`
+   - `cd ..`
+3. Frontend setup:
+   - `cd frontend`
+   - `npm install`
+   - `cd ..`
+4. Run backend:
+   - `uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload`
+5. Run frontend (new terminal):
+   - `cd frontend`
+   - `npm run dev`
+6. Open:
    - Frontend: `http://localhost:3000`
    - Backend docs: `http://localhost:8000/docs`
 
@@ -33,6 +45,7 @@ Run backend tests:
 - `pytest`
 
 ## Notes
+- If Redis/Celery worker is not running, task routes automatically fall back to local background execution.
 - AI keys are encrypted at rest (`ai_configs.api_key`).
 - Debug mode limits download pipeline to first episode.
 - Storage path layout is inside project `storage/`, e.g. `storage/courses/{course_slug}/...`.

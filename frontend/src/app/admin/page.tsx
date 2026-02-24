@@ -5,6 +5,7 @@ export default function AdminIndexPage() {
     <section className="panel stack">
       <h1>Admin Panel</h1>
       <div className="row">
+        <Link className="btn" href="/admin/courses">Manage Courses</Link>
         <Link className="btn" href="/admin/settings">Settings</Link>
         <Link className="btn" href="/admin/ai-config">AI Config</Link>
         <Link className="btn" href="/admin/logs">Logs</Link>

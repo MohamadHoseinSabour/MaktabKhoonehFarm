@@ -3,7 +3,7 @@ import { Fragment, ReactNode, useState } from 'react'
 import { Episode } from '@/services/api'
 import { StatusBadge } from './StatusBadge'
 
-type EpisodeActionType = 'download' | 'process' | 'upload' | 'retry'
+type EpisodeActionType = 'download' | 'process' | 'upload' | 'retry' | 'translate'
 
 type Props = {
   episodes: Episode[]
@@ -152,6 +152,15 @@ export function EpisodeTable({ episodes, onAction, runningAction }: Props) {
                         onClick={() => onAction(episode.id, 'retry')}
                       >
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"><path d="M3 12a9 9 0 0 1 15.55-6.36L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.55 6.36L3 16"/><path d="M3 21v-5h5"/></svg>
+                      </IconButton>
+
+                      <IconButton
+                        label={isRunning && runningAction?.action === 'translate' ? 'Translating...' : 'Translate title'}
+                        className={`secondary ${isRunning && runningAction?.action === 'translate' ? 'running' : ''}`}
+                        disabled={isRunning}
+                        onClick={() => onAction(episode.id, 'translate')}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14"><path d="M4 5h16"/><path d="M7 5c0 5 2 9 5 12"/><path d="M17 5c0 3-1 6-3 8"/><path d="M9 17h8"/><path d="M13 13l4 8"/></svg>
                       </IconButton>
 
                       <IconButton

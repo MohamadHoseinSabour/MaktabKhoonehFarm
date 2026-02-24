@@ -11,15 +11,19 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { useCourseProgress } from '@/hooks/useCourseProgress'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import {
+  AICourseContent,
   API_BASE,
   aiTranslate,
   downloadEpisode,
+  generateCourseAiContent,
   getCourse,
   processEpisode,
   processSubtitles,
   retryEpisode,
   startProcessing,
   toggleDebug,
+  translateEpisodeTitle,
+  UploadEpisodeResponse,
   uploadEpisode,
 } from '@/services/api'
 
@@ -28,8 +32,8 @@ function toWsUrl(base: string, courseId: string) {
   return `${wsBase}/ws/courses/${courseId}/live-logs/`
 }
 
-type GlobalAction = 'toggle_debug' | 'start_download' | 'process_subtitles' | 'ai_translate'
-type EpisodeAction = 'download' | 'process' | 'upload' | 'retry'
+type GlobalAction = 'toggle_debug' | 'start_download' | 'process_subtitles' | 'ai_translate' | 'ai_course_content'
+type EpisodeAction = 'download' | 'process' | 'upload' | 'retry' | 'translate'
 const EXPIRED_LINK_PREFIX = 'LINK_EXPIRED:'
 
 function episodeCurrentOperation(episode: { video_status: string; subtitle_status: string; exercise_status: string }) {
@@ -45,6 +49,78 @@ function episodeCurrentOperation(episode: { video_status: string; subtitle_statu
   return null
 }
 
+function parseAiCourseContent(value: unknown): AICourseContent | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const data = value as Record<string, unknown>
+  const asText = (item: unknown) => (typeof item === 'string' && item.trim() ? item.trim() : null)
+  const asList = (item: unknown) =>
+    Array.isArray(item) ? item.map((entry) => (typeof entry === 'string' ? entry.trim() : '')).filter(Boolean) : []
+
+  const course_overview = asText(data.course_overview)
+  const prerequisites_description = asText(data.prerequisites_description)
+  const prerequisites = asList(data.prerequisites)
+  const what_you_will_learn = asList(data.what_you_will_learn)
+  const course_goals = asList(data.course_goals)
+
+  if (!course_overview || !prerequisites_description || !prerequisites.length || !what_you_will_learn.length || !course_goals.length) {
+    return null
+  }
+
+  return {
+    course_overview,
+    prerequisites,
+    prerequisites_description,
+    what_you_will_learn,
+    course_goals,
+  }
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function listToHtml(items: string[]): string {
+  return items.map((item) => `    <li>${escapeHtml(item)}</li>`).join('\n')
+}
+
+function buildCourseContentHtml(content: AICourseContent): string {
+  const paragraphs = content.course_overview
+    .split(/\n{2,}/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  const overviewHtml = (paragraphs.length ? paragraphs : [content.course_overview])
+    .map((item) => `  <p>${escapeHtml(item).replace(/\n/g, '<br />')}</p>`)
+    .join('\n')
+
+  return [
+    '<section class="generated-course-content" dir="rtl">',
+    '  <h2>شرح دوره</h2>',
+    overviewHtml,
+    '  <h3>پیش نیاز ها</h3>',
+    '  <ul>',
+    listToHtml(content.prerequisites),
+    '  </ul>',
+    '  <h3>توضیحات پیش نیاز</h3>',
+    `  <p>${escapeHtml(content.prerequisites_description).replace(/\n/g, '<br />')}</p>`,
+    '  <h3>آنچه در این دوره می آموزید</h3>',
+    '  <ul>',
+    listToHtml(content.what_you_will_learn),
+    '  </ul>',
+    '  <h3>اهداف دوره</h3>',
+    '  <ul>',
+    listToHtml(content.course_goals),
+    '  </ul>',
+    '</section>',
+  ].join('\n')
+}
+
 export default function CourseDetailPage() {
   const params = useParams<{ id: string }>()
   const courseId = params.id
@@ -53,6 +129,7 @@ export default function CourseDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusNote, setStatusNote] = useState<string | null>(null)
+  const [copyHint, setCopyHint] = useState<string>('Click HTML box to copy all')
   const [runningGlobalAction, setRunningGlobalAction] = useState<GlobalAction | null>(null)
   const [runningEpisodeAction, setRunningEpisodeAction] = useState<{ episodeId: string; action: EpisodeAction } | null>(null)
 
@@ -114,7 +191,26 @@ export default function CourseDetailPage() {
       } else if (action === 'process') {
         await processEpisode(episodeId)
       } else if (action === 'upload') {
-        await uploadEpisode(episodeId)
+        const uploadResult: UploadEpisodeResponse = await uploadEpisode(episodeId)
+        if (uploadResult.skip_existing) {
+          if (uploadResult.debug_halt) {
+            setStatusNote('Upload stopped in debug mode: similar episode already exists on target.')
+          } else {
+            setStatusNote('Upload skipped: similar episode already exists on target.')
+          }
+          await load()
+          return
+        }
+        if (uploadResult.summary) {
+          const summary = uploadResult.summary
+          setStatusNote(
+            `Upload finished: uploaded=${summary.run_uploaded}, failed=${summary.run_failed}, skipped=${summary.run_skipped_existing}`
+          )
+          await load()
+          return
+        }
+      } else if (action === 'translate') {
+        await translateEpisodeTitle(episodeId)
       } else {
         await retryEpisode(episodeId)
       }
@@ -142,8 +238,28 @@ export default function CourseDetailPage() {
     return course.episodes.some((episode) => (episode.error_message ?? '').startsWith(EXPIRED_LINK_PREFIX))
   }, [course])
 
+  const aiCourseContent = useMemo(() => parseAiCourseContent(course?.extra_metadata?.ai_course_content), [course])
+  const aiCourseContentHtml = useMemo(
+    () => (aiCourseContent ? buildCourseContentHtml(aiCourseContent) : ''),
+    [aiCourseContent]
+  )
+
   const jumpToLinkManager = () => {
     document.getElementById('link-manager')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  const copyHtmlPayload = async () => {
+    if (!aiCourseContentHtml) {
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(aiCourseContentHtml)
+      setCopyHint('Copied to clipboard')
+      setTimeout(() => setCopyHint('Click HTML box to copy all'), 1800)
+    } catch {
+      setCopyHint('Copy failed')
+      setTimeout(() => setCopyHint('Click HTML box to copy all'), 1800)
+    }
   }
 
   if (loading) {
@@ -214,9 +330,84 @@ export default function CourseDetailPage() {
           >
             {runningGlobalAction === 'ai_translate' ? 'Translating...' : 'AI Translate'}
           </button>
+
+          <button
+            className={`btn secondary ${runningGlobalAction === 'ai_course_content' ? 'running' : ''}`}
+            disabled={runningGlobalAction !== null}
+            onClick={() => runGlobalAction('ai_course_content', 'AI course content', () => generateCourseAiContent(courseId))}
+          >
+            {runningGlobalAction === 'ai_course_content' ? 'Generating...' : 'Generate AI Content'}
+          </button>
         </div>
 
         {error && <p>{error}</p>}
+      </section>
+
+      <section className="panel stack">
+        <h3 dir="rtl">محتوای تولیدشده با هوش مصنوعی</h3>
+        {aiCourseContent ? (
+          <div className="stack ai-content" dir="rtl">
+            <div className="stack" style={{ gap: 6 }}>
+              <h4>شرح دوره</h4>
+              <p className="overview-text">{aiCourseContent.course_overview}</p>
+            </div>
+
+            <div className="stack" style={{ gap: 6 }}>
+              <h4>پیش نیاز ها</h4>
+              <ul className="bullet-list">
+                {aiCourseContent.prerequisites.map((item, index) => (
+                  <li key={`${item}-${index}`}>{item}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="stack" style={{ gap: 6 }}>
+              <h4>توضیحات پیش نیاز</h4>
+              <p>{aiCourseContent.prerequisites_description}</p>
+            </div>
+
+            <div className="stack" style={{ gap: 6 }}>
+              <h4>آنچه در این دوره می آموزید</h4>
+              <ul className="bullet-list">
+                {aiCourseContent.what_you_will_learn.map((item, index) => (
+                  <li key={`${item}-${index}`}>{item}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="stack" style={{ gap: 6 }}>
+              <h4>اهداف دوره</h4>
+              <ul className="bullet-list">
+                {aiCourseContent.course_goals.map((item, index) => (
+                  <li key={`${item}-${index}`}>{item}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="stack" style={{ gap: 6 }}>
+              <div className="row-between">
+                <h4>HTML Output</h4>
+                <small className="copy-hint">{copyHint}</small>
+              </div>
+              <div
+                className="html-copy-box"
+                role="button"
+                tabIndex={0}
+                onClick={copyHtmlPayload}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    void copyHtmlPayload()
+                  }
+                }}
+              >
+                <pre>{aiCourseContentHtml}</pre>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p dir="rtl">هنوز محتوای هوش مصنوعی تولید نشده است. روی دکمه Generate AI Content بزنید.</p>
+        )}
       </section>
 
       {hasExpiredLinks && (

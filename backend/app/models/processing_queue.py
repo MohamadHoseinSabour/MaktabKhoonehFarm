@@ -1,8 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Enum, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Enum, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -12,8 +11,8 @@ from app.models.enums import ProcessingTaskType, QueueStatus
 class ProcessingQueue(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = 'processing_queue'
 
-    course_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('courses.id', ondelete='CASCADE'), nullable=False)
-    episode_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('episodes.id', ondelete='SET NULL'))
+    course_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey('courses.id', ondelete='CASCADE'), nullable=False)
+    episode_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey('episodes.id', ondelete='SET NULL'))
     task_type: Mapped[ProcessingTaskType] = mapped_column(
         Enum(ProcessingTaskType, name='processing_task_type', native_enum=False),
         nullable=False,

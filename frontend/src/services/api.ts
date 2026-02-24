@@ -1,5 +1,31 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000'
 
+type ApiErrorPayload = {
+  detail?: unknown
+  message?: unknown
+  error?: unknown
+}
+
+function normalizeErrorMessage(status: number, body: string): string {
+  const fallback = `Request failed: ${status}`
+  const trimmed = body.trim()
+  if (!trimmed) {
+    return fallback
+  }
+
+  try {
+    const payload = JSON.parse(trimmed) as ApiErrorPayload
+    const candidate = payload.detail ?? payload.message ?? payload.error
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim()
+    }
+  } catch {
+    // Keep plain-text fallback below.
+  }
+
+  return trimmed || fallback
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -12,7 +38,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const text = await response.text()
-    throw new Error(text || `Request failed: ${response.status}`)
+    throw new Error(normalizeErrorMessage(response.status, text))
   }
 
   if (response.status === 204) {
@@ -88,8 +114,51 @@ export type TaskLog = {
   created_at: string
 }
 
+export type AICourseContent = {
+  course_overview: string
+  prerequisites: string[]
+  prerequisites_description: string
+  what_you_will_learn: string[]
+  course_goals: string[]
+}
+
+export type UploadEpisodeResponse = {
+  episode_id: string
+  uploaded: string[]
+  status?: string
+  skip_existing?: boolean
+  debug_halt?: boolean
+  summary?: {
+    state: string
+    run_requested: number
+    run_processed: number
+    run_uploaded: number
+    run_failed: number
+    run_skipped_existing: number
+    uploaded_total: number
+    failed_total: number
+    total_episodes: number
+    updated_at: string
+  }
+  navigation?: Record<string, unknown>
+}
+
+export type Setting = {
+  id: string
+  key: string
+  value: string
+  category?: string | null
+  description?: string | null
+}
+
 export async function getCourses() {
   return request<Course[]>('/api/courses/')
+}
+
+export async function deleteCourse(courseId: string) {
+  return request<void>(`/api/courses/${courseId}/`, {
+    method: 'DELETE',
+  })
 }
 
 export async function getCourse(id: string) {
@@ -127,6 +196,12 @@ export async function aiTranslate(courseId: string) {
   })
 }
 
+export async function generateCourseAiContent(courseId: string) {
+  return request<{ status: string; content: AICourseContent }>(`/api/courses/${courseId}/generate-ai-content/`, {
+    method: 'POST',
+  })
+}
+
 export async function getEpisodes(courseId: string) {
   return request<Episode[]>(`/api/courses/${courseId}/episodes/`)
 }
@@ -144,13 +219,36 @@ export async function processEpisode(episodeId: string) {
 }
 
 export async function uploadEpisode(episodeId: string) {
-  return request<{ episode_id: string; uploaded: string[] }>(`/api/episodes/${episodeId}/upload/`, {
+  return request<UploadEpisodeResponse>(`/api/episodes/${episodeId}/upload/`, {
+    method: 'POST',
+  })
+}
+
+export async function getSettings() {
+  return request<Setting[]>('/api/settings/')
+}
+
+export async function saveSettings(items: Array<Pick<Setting, 'key' | 'value' | 'category' | 'description'>>) {
+  return request<Setting[]>('/api/settings/', {
+    method: 'PUT',
+    body: JSON.stringify(items),
+  })
+}
+
+export async function validateUploadCookies() {
+  return request<{ valid: boolean; message: string }>('/api/upload-automation/validate-cookies/', {
     method: 'POST',
   })
 }
 
 export async function retryEpisode(episodeId: string) {
   return request<{ episode_id: string; reset: string[] }>(`/api/episodes/${episodeId}/retry/`, {
+    method: 'POST',
+  })
+}
+
+export async function translateEpisodeTitle(episodeId: string) {
+  return request<Episode>(`/api/episodes/${episodeId}/translate-title/`, {
     method: 'POST',
   })
 }

@@ -23,3 +23,4 @@ cryptography==45.0.7
 pytest==8.4.2
 pytest-asyncio==1.1.0
 respx==0.22.0
+selenium==4.35.0

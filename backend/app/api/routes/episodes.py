@@ -10,6 +10,7 @@ from app.models.course import Course
 from app.models.episode import Episode
 from app.models.enums import AssetStatus, LogLevel
 from app.schemas.episode import EpisodeOut, EpisodeUpdate
+from app.services.ai.translator import AITranslator
 from app.services.course_service import course_storage_root
 from app.services.downloader.engine import DownloadEngine
 from app.services.downloader.file_validator import FileValidator
@@ -21,6 +22,12 @@ from app.services.downloader.link_expiry import (
 from app.services.processor.file_cleaner import clean_filename
 from app.services.processor.subtitle_processor import SubtitleProcessor
 from app.services.task_logger import log_task_sync
+from app.services.upload import (
+    FirefoxUploadNavigator,
+    UploadAuthExpiredError,
+    UploadAutomationError,
+    UploadConfigurationError,
+)
 
 router = APIRouter()
 
@@ -104,7 +111,7 @@ def process_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db))
 
     if episode.subtitle_local_path and Path(episode.subtitle_local_path).exists():
         src = Path(episode.subtitle_local_path)
-        dst = root / 'subtitles' / 'processed' / src.name
+        dst = root / 'subtitles' / 'processed' / f'{src.stem}.vtt'
         episode.subtitle_status = AssetStatus.PROCESSING
         db.commit()
         try:
@@ -147,18 +154,175 @@ def upload_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db)):
     if not episode:
         raise HTTPException(status_code=404, detail='Episode not found')
 
-    uploaded: list[str] = []
-    for field in ['video_status', 'subtitle_status', 'exercise_status']:
-        current = getattr(episode, field)
-        if current in {AssetStatus.DOWNLOADED, AssetStatus.PROCESSED}:
-            setattr(episode, field, AssetStatus.UPLOADED)
-            uploaded.append(field.replace('_status', ''))
-        elif current == AssetStatus.UPLOADING:
-            setattr(episode, field, AssetStatus.UPLOADED)
-            uploaded.append(field.replace('_status', ''))
+    course = db.query(Course).filter(Course.id == episode.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail='Course not found')
 
+    ordered_episodes = (
+        db.query(Episode)
+        .filter(Episode.course_id == course.id)
+        .order_by(Episode.sort_order.asc(), Episode.episode_number.asc().nullslast())
+        .all()
+    )
+    start_index = next((idx for idx, item in enumerate(ordered_episodes) if item.id == episode.id), None)
+    if start_index is None:
+        raise HTTPException(status_code=404, detail='Episode not found in ordered list')
+
+    target_episodes = ordered_episodes[start_index:]
+    if course.debug_mode and target_episodes:
+        target_episodes = target_episodes[:1]
+
+    try:
+        navigator = FirefoxUploadNavigator(db)
+        metadata = dict(course.extra_metadata or {})
+        preferred_units_url = metadata.get('upload_units_url') if isinstance(metadata.get('upload_units_url'), str) else None
+        navigation = navigator.upload_course_episodes(
+            course,
+            target_episodes,
+            keep_browser_open=bool(course.debug_mode),
+            preferred_units_url=preferred_units_url,
+        )
+        units_list_url = navigation.get('units_list_url')
+        if isinstance(units_list_url, str) and units_list_url:
+            if metadata.get('upload_units_url') != units_list_url:
+                metadata['upload_units_url'] = units_list_url
+                course.extra_metadata = metadata
+                db.commit()
+    except UploadAuthExpiredError as exc:
+        log_task_sync(
+            db,
+            level=LogLevel.WARNING,
+            message='Upload session cookies expired or invalid',
+            task_type='upload_navigation',
+            status='failed',
+            course_id=course.id,
+            episode_id=episode.id,
+            details={'error': str(exc)},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UploadConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UploadAutomationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    episode_map = {str(item.id): item for item in ordered_episodes}
+    run_results = navigation.get('results') if isinstance(navigation.get('results'), list) else []
+    run_uploaded = 0
+    run_failed = 0
+    run_skipped_existing = 0
+    uploaded_episode_ids: list[str] = []
+
+    for row in run_results:
+        if not isinstance(row, dict):
+            continue
+        row_episode_id = str(row.get('episode_id') or '')
+        current_episode = episode_map.get(row_episode_id)
+        if current_episode is None:
+            continue
+
+        result = str(row.get('result') or '')
+        if result == 'uploaded':
+            run_uploaded += 1
+            uploaded_episode_ids.append(row_episode_id)
+            current_episode.video_status = AssetStatus.UPLOADED
+            if bool(row.get('subtitle_attached')):
+                current_episode.subtitle_status = AssetStatus.UPLOADED
+            current_episode.error_message = None
+            continue
+
+        if result == 'skipped_existing':
+            run_skipped_existing += 1
+            continue
+
+        run_failed += 1
+        current_episode.video_status = AssetStatus.ERROR
+        if result == 'skipped_missing_video':
+            current_episode.error_message = 'Upload skipped: local video file is missing.'
+        else:
+            error_text = str(row.get('error') or 'Upload automation failed.')
+            current_episode.error_message = f'Upload failed: {error_text}'
+
+    uploaded_total = sum(1 for item in ordered_episodes if item.video_status == AssetStatus.UPLOADED)
+    failed_total = sum(1 for item in ordered_episodes if item.video_status == AssetStatus.ERROR)
+    requested_count = len(target_episodes)
+    processed_count = len(run_results)
+    run_state = 'failed' if run_failed > 0 and run_uploaded == 0 else ('partial_error' if run_failed > 0 else 'completed')
+
+    summary = {
+        'state': run_state,
+        'run_requested': requested_count,
+        'run_processed': processed_count,
+        'run_uploaded': run_uploaded,
+        'run_failed': run_failed,
+        'run_skipped_existing': run_skipped_existing,
+        'uploaded_total': uploaded_total,
+        'failed_total': failed_total,
+        'total_episodes': len(ordered_episodes),
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    }
+    metadata = dict(course.extra_metadata or {})
+    metadata['upload_summary'] = summary
+    course.extra_metadata = metadata
     db.commit()
-    return {'episode_id': str(episode.id), 'uploaded': uploaded}
+
+    first_result = run_results[0] if run_results and isinstance(run_results[0], dict) else {}
+    first_skip_existing = bool(first_result.get('result') == 'skipped_existing')
+    debug_halt = bool(course.debug_mode and first_skip_existing)
+
+    log_status = 'failed' if run_failed > 0 else ('skipped' if run_uploaded == 0 and run_skipped_existing > 0 else 'completed')
+    log_message = (
+        f'Upload automation finished: uploaded={run_uploaded}, failed={run_failed}, skipped={run_skipped_existing}'
+    )
+
+    log_task_sync(
+        db,
+        level=LogLevel.WARNING if run_failed > 0 else LogLevel.INFO,
+        message=log_message,
+        task_type='upload_navigation',
+        status=log_status,
+        course_id=course.id,
+        episode_id=episode.id,
+        details=navigation,
+    )
+    return {
+        'episode_id': str(episode.id),
+        'uploaded': uploaded_episode_ids,
+        'navigation': navigation,
+        'status': log_status,
+        'skip_existing': first_skip_existing,
+        'debug_halt': debug_halt,
+        'summary': summary,
+    }
+
+
+@router.post('/episodes/{episode_id}/translate-title/', response_model=EpisodeOut)
+def translate_episode_title(episode_id: uuid.UUID, db: Session = Depends(get_db)):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail='Episode not found')
+
+    course = db.query(Course).filter(Course.id == episode.course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail='Course not found')
+    if not episode.title_en:
+        raise HTTPException(status_code=400, detail='Episode English title is empty')
+
+    translator = AITranslator(db)
+    result = translator.translate_episode_title(course, episode)
+    if not result.get('translated'):
+        raise HTTPException(status_code=400, detail=result.get('reason', 'Translation failed'))
+
+    db.refresh(episode)
+    log_task_sync(
+        db,
+        level=LogLevel.INFO,
+        message=f'Episode title translated ({episode.episode_number})',
+        task_type='translate_episode_title',
+        status='completed',
+        course_id=course.id,
+        episode_id=episode.id,
+    )
+    return episode
 
 
 def _download_episode_assets(

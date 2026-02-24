@@ -9,6 +9,7 @@ from app.models.course import Course
 from app.models.episode import Episode
 from app.models.enums import AssetStatus, CourseStatus, LogLevel
 from app.schemas.course import CourseCreate, CourseDetailOut, CourseOut, CourseUpdate, ToggleDebugResponse
+from app.services.ai.translator import AITranslator
 from app.services.course_service import course_storage_root
 from app.services.local_runner import run_in_background
 from app.services.task_dispatcher import celery_worker_available
@@ -136,6 +137,34 @@ def retry_all_failed(course_id: uuid.UUID, db: Session = Depends(get_db)):
 
     db.commit()
     return {'retried': retried}
+
+
+@router.post('/{course_id}/generate-ai-content/')
+def generate_ai_content(course_id: uuid.UUID, db: Session = Depends(get_db)):
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail='Course not found')
+
+    episodes = (
+        db.query(Episode)
+        .filter(Episode.course_id == course.id)
+        .order_by(Episode.sort_order.asc(), Episode.episode_number.asc().nullslast())
+        .all()
+    )
+    translator = AITranslator(db)
+    result = translator.generate_course_content(course, episodes)
+    if not result.get('generated'):
+        raise HTTPException(status_code=400, detail=result.get('reason', 'AI content generation failed'))
+
+    log_task_sync(
+        db,
+        level=LogLevel.INFO,
+        message='AI course content generated',
+        task_type='ai_course_content',
+        status='completed',
+        course_id=course.id,
+    )
+    return {'status': 'completed', 'content': result.get('content', {})}
 
 
 def _dispatch_scrape(db: Session, course: Course) -> None:
