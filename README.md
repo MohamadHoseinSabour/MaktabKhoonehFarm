@@ -1,51 +1,95 @@
-# Automated Course Migration System (ACMS)
+# سیستم اتوماسیون انتقال دوره‌ها (ACMS)
 
-Phase-1 scaffold for course scraping, link management, download/processing pipeline, AI translation, and dashboard/admin UI.
+سیستم اتوماسیون انتقال دوره‌ها (Automated Course Migration System - به اختصار ACMS) یک پلتفرم جامع برای استخراج داده‌های دوره‌های آموزشی، مدیریت لینک‌ها، دانلود و پردازش ویدیوها، ترجمه هوشمند زیرنویس‌ها به کمک هوش مصنوعی و ارائه داشبورد مدیریتی است.
 
-## Stack
-- Backend: FastAPI + SQLAlchemy + Celery + Redis
-- Frontend: Next.js (App Router, TypeScript)
-- Database: SQLite (default) or PostgreSQL
+## ابزارها و تکنولوژی‌ها (Stack)
 
-## Quick Start
-1. Create env file:
-   - `cp .env.example .env`
-2. Backend setup:
-   - `cd backend`
-   - `python -m venv .venv`
-   - `.venv\Scripts\activate` (Windows)
-   - `pip install -r requirements.txt`
-   - `cd ..`
-3. Frontend setup:
-   - `cd frontend`
-   - `npm install`
-   - `cd ..`
-4. Run backend:
-   - `uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload`
-5. Run frontend (new terminal):
-   - `cd frontend`
-   - `npm run dev`
-6. Open:
-   - Frontend: `http://localhost:3000`
-   - Backend docs: `http://localhost:8000/docs`
+- **بک‌اند (Backend):** FastAPI + SQLAlchemy + Celery + Redis
+- **فرانت‌اند (Frontend):** Next.js 14 (App Router, TypeScript) + React 18
+- **پایگاه داده (Database):** SQLite (پیش‌فرض) یا PostgreSQL
 
-## Core API
-- `POST /api/courses/` add new course + queue scrape
-- `POST /api/courses/{id}/links/` parse/match links
-- `POST /api/courses/{id}/process/` queue download pipeline
-- `POST /api/courses/{id}/process-subtitles/` queue subtitle processor
-- `POST /api/courses/{id}/ai-translate/` queue AI translation
-- `GET /api/dashboard/stats/` global stats
-- `GET /api/courses/{id}/progress/` per-course progress
-- `WS /ws/courses/{id}/live-logs/` live logs
+## امکانات و ویژگی‌های کلیدی
 
-## Tests
-Run backend tests:
-- `cd backend`
-- `pytest`
+- استخراج اطلاعات و لینک‌های دوره‌ها (Scraping)
+- دانلود و مدیریت فایل‌های دوره
+- استخراج و پردازش زیرنویس‌ها
+- ترجمه خودکار زیرنویس‌ها با استفاده از هوش مصنوعی (OpenAI / کلید API)
+- اجرای پردازش‌ها در پس‌زمینه با Celery و قابلیت Fallback به پردازش محلی (در صورت عدم حضور Redis)
+- داشبورد مدیریتی و رابط کاربری مدرن با Next.js
+- نمایش لاگ‌های زنده محیط کاربری از طریق WebSockets
 
-## Notes
-- If Redis/Celery worker is not running, task routes automatically fall back to local background execution.
-- AI keys are encrypted at rest (`ai_configs.api_key`).
-- Debug mode limits download pipeline to first episode.
-- Storage path layout is inside project `storage/`, e.g. `storage/courses/{course_slug}/...`.
+## ساختار پروژه
+
+پروژه به دو بخش کلی معماری شده است:
+- `backend/`: کدهای مربوط به وب سرویس، دیتابیس، مدل‌ها و تسک‌های غیرهمزمان.
+- `frontend/`: پنل ادمین و داشبورد کاربری نوشته شده در قالب ریکت و نکست جی‌اس.
+
+## راه‌اندازی سریع (Quick Start)
+
+### اسکریپت اجرای خودکار (ویندوز)
+برای راحت‌ترین شکل اجرای پروژه در محیط ویندوز، می‌توانید مستقیماً از فایل `run_latest.bat` در ریشه پروژه استفاده کنید. این فایل تغییرات گیت را دریافت کرده، وابستگی‌های نرم‌افزاری را نصب و فرانت‌اند و بک‌اند را برای شما اجرا می‌کند:
+
+```bat
+.\run_latest.bat
+```
+سپس داشبورد در `http://localhost:3000` در دسترس خواهد بود.
+
+---
+
+### راه‌اندازی دستی
+
+#### ۱. تنظیم متغیرهای محیطی
+ابتدا از روی فایل نمونه یک فایل محیطی جدید ایجاد کنید:
+```bash
+cp .env.example .env
+```
+
+#### ۲. راه‌اندازی بک‌اند
+```bash
+cd backend
+python -m venv .venv
+
+# فعال‌سازی در ویندوز:
+.venv\Scripts\activate
+# فعال‌سازی در لینوکس / مک:
+# source .venv/bin/activate
+
+pip install -r requirements.txt
+uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
+```
+با این کار، مستندات ای‌پی‌آی پروژه در آدرس `http://localhost:8000/docs` فعال می‌گردد.
+
+#### ۳. راه‌اندازی فرانت‌اند
+در یک ترمینال دیگر، در پوشه `frontend/` دستورات زیر را اجرا کنید:
+```bash
+cd frontend
+npm install
+npm run dev
+```
+با این کار، داشبورد در آدرس `http://localhost:3000` اجرا خواهد شد.
+
+## مسیرهای مهم سرویس (Core API)
+
+- `POST /api/courses/` : افزودن دوره جدید و قرار دادن فرایند Scrape در صف
+- `POST /api/courses/{id}/links/` : بررسی و تطبیق لینک‌های یک دوره
+- `POST /api/courses/{id}/process/` : ارسال عملیات پردازش و دانلود به صف
+- `POST /api/courses/{id}/process-subtitles/` : ارسال پردازش زیرنویس به صف
+- `POST /api/courses/{id}/ai-translate/` : درخواست ترجمه زیرنویس با هوش مصنوعی
+- `GET /api/dashboard/stats/` : دریافت آمار کلی و یکپارچه داشبورد
+- `GET /api/courses/{id}/progress/` : دریافت گزارش درصد پیشرفت دوره‌ها
+- `WS /ws/courses/{id}/live-logs/` : ارتباط وب‌سوکت برای دریافت لاگ‌های زنده
+
+## اجرای تست‌ها
+
+برای اطمینان از صحت عملکرد بک‌اند می‌توانید آزمایش‌های (Tests) بک‌اند را با `pytest` اجرا کنید:
+```bash
+cd backend
+pytest
+```
+
+## نکات توسعه و نگهداری
+
+- در صورتی که Redis/Celery Worker در حال اجرا نباشد، سیستم به طور خودکار تسک‌ها را به صورت محلی و در پس‌زمینه (Background execution) پردازش خواهد کرد.
+- کلیدهای ای‌پی‌آی هوش مصنوعی در پایگاه داده رمزنگاری می‌شوند (فیلد `ai_configs.api_key`).
+- حالت خطایابی (Debug Mode) به صورت موقت فرایند دانلود فایل‌ها را به دانلود قسمت (Episode) اول محدود می‌کند تا روند آزمایش سیستم سریع‌تر انجام شود.
+- فایل‌های دانلود شده توسط سیستم مستقیماً در فولدر ساختارنیافته `storage/` ذخیره شده و آدرس‌دهی آن‌ها بر اساس الگوی `storage/courses/{course_slug}/...` مدیریت می‌شود.
