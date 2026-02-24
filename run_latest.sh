@@ -40,8 +40,8 @@ backend/.venv/bin/python -m pip install --quiet -r backend/requirements.txt
 echo "[4/6] Installing frontend packages..."
 cd frontend
 npm install --silent
-echo "[5/6] Building frontend..."
-npm run build
+echo "[5/6] Building frontend (with memory limit)..."
+NODE_OPTIONS="--max-old-space-size=512" npm run build
 cd "$ROOT"
 
 # ─── 5. Create storage dirs ───
