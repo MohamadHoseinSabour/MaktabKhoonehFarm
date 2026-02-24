@@ -181,8 +181,7 @@ class FirefoxUploadNavigator:
 
             if not self._find_and_click_course_chapters(driver, query):
                 self._create_new_course(driver, course)
-            else:
-                self._create_first_chapter(driver, course)
+            self._ensure_chapters_have_units(driver, course)
             self._assert_logged_in(driver)
             self._click_units_button(driver)
             self._wait_for_units_listing_ready(driver)
@@ -293,8 +292,7 @@ class FirefoxUploadNavigator:
 
                 if not self._find_and_click_course_chapters(driver, query):
                     self._create_new_course(driver, course)
-                else:
-                    self._create_first_chapter(driver, course)
+                self._ensure_chapters_have_units(driver, course)
                 self._assert_logged_in(driver)
                 self._click_units_button(driver)
                 self._wait_for_units_listing_ready(driver)
@@ -393,10 +391,8 @@ class FirefoxUploadNavigator:
         except TimeoutException:
             return
 
-    def _click_sections_button(self, driver: webdriver.Firefox, course: Course = None) -> None:
+    def _click_sections_button(self, driver: webdriver.Firefox) -> None:
         if self._try_click_sections_button(driver):
-            if course:
-                self._create_first_chapter(driver, course)
             return
 
         raise UploadConfigurationError(
@@ -452,6 +448,7 @@ class FirefoxUploadNavigator:
         return False
 
     def _create_new_course(self, driver: webdriver.Firefox, course: Course) -> None:
+        """Create a brand new course draft and navigate to its /chapters/ page."""
         create_locators = [
             (By.XPATH, "//a[contains(@href, '/create-draft') or contains(@href, '/courses/create-draft')]"),
             (By.XPATH, "//a[contains(normalize-space(.), 'ساخت دوره جدید')]"),
@@ -478,8 +475,10 @@ class FirefoxUploadNavigator:
         self._wait_for_page_ready(driver)
         self._pause_between_steps()
 
+        # --- Step 1: Fill the initial create-draft form (title + category) ---
+        # This page has #title and #main_category
         try:
-            title_input = WebDriverWait(driver, 3).until(
+            title_input = WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "#title"))
             )
             title = (course.title_fa or course.title_en or '').strip()
@@ -494,12 +493,10 @@ class FirefoxUploadNavigator:
                 self._safe_click(driver, category_dropdown)
                 self._pause_between_steps(0.5)
                 
-                # Scroll to load all options
                 try:
                     menu_container = WebDriverWait(driver, 2).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, ".z-50"))
                     )
-                    # Scroll down a few times to ensure lazy-loaded or hidden options appear
                     for _ in range(4):
                         driver.execute_script("arguments[0].scrollTo(0, arguments[0].scrollHeight);", menu_container)
                         driver.execute_script("""
@@ -510,161 +507,270 @@ class FirefoxUploadNavigator:
                 except TimeoutException:
                     pass
 
-                # Find the best matching category
                 menu_options = driver.find_elements(By.CSS_SELECTOR, ".z-50 li, .z-50 .cursor-pointer, .z-50 a, .z-50 div[role='option']")
                 best_option = None
-                
                 for option in menu_options:
                     if not option.is_displayed():
                         continue
                     if best_option is None:
-                        best_option = option  # default to first visible
-                        
+                        best_option = option
                     opt_text = (option.text or "").strip()
                     if opt_text and self._titles_match(self._normalize_title_text(opt_text), self._normalize_title_text(title)):
                         best_option = option
                         break
-                        
                 if best_option:
                     self._safe_click(driver, best_option)
             except WebDriverException:
                 pass
-            
-            
-            # Switch to description iframe and enter text
-            try:
-                desc_iframe = driver.find_element(By.CSS_SELECTOR, "#id_description_ifr")
-                driver.switch_to.frame(desc_iframe)
-                desc_body = driver.find_element(By.TAG_NAME, "body")
-                desc_body.clear()
-                desc_body.send_keys(title + " - این دوره به صورت خودکار ایجاد شده است.\n\n" + (course.description or "توضیحات دوره"))
-                driver.switch_to.default_content()
-            except WebDriverException:
-                driver.switch_to.default_content()
 
-            # Switch to prerequisite iframe and enter text
-            try:
-                pre_iframe = driver.find_element(By.CSS_SELECTOR, "#id_prerequisite_description_ifr")
-                driver.switch_to.frame(pre_iframe)
-                pre_body = driver.find_element(By.TAG_NAME, "body")
-                pre_body.clear()
-                pre_body.send_keys("ندارد")
-                driver.switch_to.default_content()
-            except WebDriverException:
-                driver.switch_to.default_content()
-
-            # Cover Image (#id_image)
-            # Default to a generic cover if course image not available right now. 
-            # In real workflow, you would pass a valid path. If skip, MaktabKhooneh might still require it.
-            # Using a try/catch to upload if a file exists locally.
-            try:
-                cover_input = driver.find_element(By.CSS_SELECTOR, "#id_image")
-                # Attempt to upload local cover if exists, or fallback to skipping if not required strictly
-                local_cover = (course.cover_local_path or '').strip()
-                if local_cover and Path(local_cover).is_file():
-                    cover_input.send_keys(str(Path(local_cover).resolve()))
-            except WebDriverException:
-                pass
-                
-            # What you'll learn items (.top-margin)
-            try:
-                learn_inputs = driver.find_elements(By.CSS_SELECTOR, ".top-margin input[type='text']")
-                learn_texts = ["تسلط به مفاهیم پایه", "انجام پروژه‌های عملی", "آمادگی برای بازار کار", "دریافت گواهینامه معتبر"]
-                for i, learn_input in enumerate(learn_inputs[:4]):
-                    learn_input.clear()
-                    learn_input.send_keys(learn_texts[i % len(learn_texts)])
-            except WebDriverException:
-                pass
-                
-            # Teaser Video (#file_upload)
-            try:
-                # We do not have a specific teaser path in Course model by default; fallback to first uploaded video or a default handling
-                teaser_input = driver.find_element(By.CSS_SELECTOR, "#file_upload")
-                local_teaser = (course.teaser_local_path or '').strip() if hasattr(course, 'teaser_local_path') else ''
-                if local_teaser and Path(local_teaser).is_file():
-                    teaser_input.send_keys(str(Path(local_teaser).resolve()))
-                    # Wait for upload to complete
-                    try:
-                        WebDriverWait(driver, self.VIDEO_UPLOAD_START_WAIT_SECONDS, poll_frequency=0.5).until(
-                            lambda d: self._has_video_upload_started(d)
-                        )
-                        stable_polls = 0
-                        deadline = time.time() + self.VIDEO_UPLOAD_WAIT_SECONDS
-                        while time.time() < deadline:
-                            if self._is_video_upload_complete(driver):
-                                stable_polls += 1
-                                if stable_polls >= self.VIDEO_UPLOAD_STABLE_POLLS:
-                                    self._pause_between_steps(1)
-                                    break
-                            else:
-                                stable_polls = 0
-                            time.sleep(1)
-                    except TimeoutException:
-                        pass
-            except WebDriverException:
-                pass
-
-            # Final submit
-            self._pause_between_steps(1)
-            try:
-                submit_btn = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, ".mirza-form__button--sticky"))
-                )
-            except TimeoutException:
-                try:
-                    submit_btn = driver.find_element(By.CSS_SELECTOR, ".\\!rounded-lg")
-                except WebDriverException:
-                    submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
-                
-            driver.execute_script("arguments[0].scrollIntoView(true);", submit_btn)
+            # Click the continue/submit button on the create-draft page
             self._pause_between_steps(0.5)
+            try:
+                submit_btn = driver.find_element(By.CSS_SELECTOR, ".\\!rounded-lg")
+            except WebDriverException:
+                submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+            driver.execute_script("arguments[0].scrollIntoView(true);", submit_btn)
+            self._pause_between_steps(0.3)
             self._safe_click(driver, submit_btn)
             
-            # Wait a moment for submission to process
             self._pause_between_steps(2.0)
             self._wait_for_page_ready(driver)
-            
-            
-        except TimeoutException:
+        except (TimeoutException, WebDriverException):
             pass
+
+        # --- Step 2: Fill the course details form (description, image, etc.) ---
+        # After submitting the create-draft form, MaktabKhooneh redirects to the
+        # full course editing page. Check if we are on that page.
+        self._fill_course_details_form(driver, course)
+
+        # --- Step 3: Navigate to chapters page ---
+        # After saving course details, we need to get to /chapters/.
+        # First check if we are already there.
+        current = driver.current_url or ''
+        if '/chapters/' not in current:
+            # Try to find and click the sections button on the current page
+            try:
+                self._click_sections_button(driver)
+            except UploadConfigurationError:
+                # If sections button not found, maybe we need to go back to course list
+                # and find the course we just created
+                driver.get(self.config.target_url)
+                self._wait_for_page_ready(driver)
+                self._pause_between_steps()
+                query = (course.title_fa or course.title_en or '').strip()
+                search_input = None
+                try:
+                    search_input = WebDriverWait(driver, self.SEARCH_WAIT_SECONDS).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, self.config.search_input_selector))
+                    )
+                except TimeoutException:
+                    pass
+                if search_input:
+                    search_input.click()
+                    search_input.send_keys(Keys.CONTROL, 'a')
+                    search_input.send_keys(Keys.DELETE)
+                    search_input.send_keys(query)
+                    search_input.send_keys(Keys.ENTER)
+                if not self._find_and_click_course_chapters(driver, query):
+                    raise UploadConfigurationError(
+                        f"Created course but could not navigate to its chapters page. current_url={driver.current_url}"
+                    )
+
+    def _fill_course_details_form(self, driver: webdriver.Firefox, course: Course) -> None:
+        """Fill the course details form if we are on it (description, prereqs, image, etc.)."""
+        title = (course.title_fa or course.title_en or '').strip()
+        
+        # Check if description iframe exists (indicates we are on the details form)
+        try:
+            desc_iframe = WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "#id_description_ifr"))
+            )
+        except TimeoutException:
+            # Not on the details form page, skip
+            return
+
+        # Fill description
+        try:
+            driver.switch_to.frame(desc_iframe)
+            desc_body = driver.find_element(By.TAG_NAME, "body")
+            desc_body.clear()
+            desc_body.send_keys(title + " - این دوره به صورت خودکار ایجاد شده است.\n\n" + (course.description or "توضیحات دوره"))
+            driver.switch_to.default_content()
+        except WebDriverException:
+            driver.switch_to.default_content()
+
+        # Fill prerequisite description
+        try:
+            pre_iframe = driver.find_element(By.CSS_SELECTOR, "#id_prerequisite_description_ifr")
+            driver.switch_to.frame(pre_iframe)
+            pre_body = driver.find_element(By.TAG_NAME, "body")
+            pre_body.clear()
+            pre_body.send_keys("ندارد")
+            driver.switch_to.default_content()
+        except WebDriverException:
+            driver.switch_to.default_content()
+
+        # Cover Image
+        try:
+            cover_input = driver.find_element(By.CSS_SELECTOR, "#id_image")
+            local_cover = getattr(course, 'cover_local_path', '') or ''
+            local_cover = local_cover.strip()
+            if local_cover and Path(local_cover).is_file():
+                cover_input.send_keys(str(Path(local_cover).resolve()))
+        except WebDriverException:
+            pass
+                
+        # What you'll learn items
+        try:
+            learn_inputs = driver.find_elements(By.CSS_SELECTOR, "input.top-margin[name='learning_goals']")
+            learn_texts = ["تسلط به مفاهیم پایه", "انجام پروژه‌های عملی", "آمادگی برای بازار کار", "دریافت گواهینامه معتبر"]
+            for i, learn_input in enumerate(learn_inputs[:4]):
+                learn_input.clear()
+                learn_input.send_keys(learn_texts[i % len(learn_texts)])
+        except WebDriverException:
+            pass
+                
+        # Teaser Video
+        try:
+            teaser_input = driver.find_element(By.CSS_SELECTOR, "#file_upload")
+            local_teaser = getattr(course, 'teaser_local_path', '') or ''
+            local_teaser = local_teaser.strip()
+            if local_teaser and Path(local_teaser).is_file():
+                teaser_input.send_keys(str(Path(local_teaser).resolve()))
+                try:
+                    WebDriverWait(driver, self.VIDEO_UPLOAD_START_WAIT_SECONDS, poll_frequency=0.5).until(
+                        lambda d: self._has_video_upload_started(d)
+                    )
+                    stable_polls = 0
+                    deadline = time.time() + self.VIDEO_UPLOAD_WAIT_SECONDS
+                    while time.time() < deadline:
+                        if self._is_video_upload_complete(driver):
+                            stable_polls += 1
+                            if stable_polls >= self.VIDEO_UPLOAD_STABLE_POLLS:
+                                self._pause_between_steps(1)
+                                break
+                        else:
+                            stable_polls = 0
+                        time.sleep(1)
+                except TimeoutException:
+                    pass
+        except WebDriverException:
+            pass
+
+        # Save form
+        self._pause_between_steps(1)
+        try:
+            submit_btn = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, ".mirza-form__button--sticky"))
+            )
+        except TimeoutException:
+            try:
+                submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+            except WebDriverException:
+                return
+                
+        driver.execute_script("arguments[0].scrollIntoView(true);", submit_btn)
+        self._pause_between_steps(0.5)
+        self._safe_click(driver, submit_btn)
+        
+        self._pause_between_steps(2.0)
+        self._wait_for_page_ready(driver)
+
+    def _ensure_chapters_have_units(self, driver: webdriver.Firefox, course: Course) -> None:
+        """Make sure we are on /chapters/ and that at least one chapter exists.
+        If no chapter exists, create one. After that, a /units/ link should be available."""
+        current_url = driver.current_url or ''
+        
+        # If we're already on /units/, nothing to do
+        if '/units/' in current_url:
+            return
+        
+        # If we're not on /chapters/, we can't do anything here
+        if '/chapters/' not in current_url:
+            return
             
-        self._click_sections_button(driver, course)
+        self._pause_between_steps(0.5)
+        self._wait_for_page_ready(driver)
+        
+        # Check if /units/ links exist (means chapters already have content)
+        units_links = driver.find_elements(By.XPATH, "//a[contains(@href, '/units/')]")
+        if units_links:
+            return  # Chapters exist, units page is reachable
+        
+        # No units links found - need to create a chapter
+        self._create_first_chapter(driver, course)
 
     def _create_first_chapter(self, driver: webdriver.Firefox, course: Course) -> None:
+        """Create the first chapter (سرفصل) for a course that has none."""
         self._pause_between_steps(1)
+        self._wait_for_page_ready(driver)
         
-        # Check if chapters/units already exist. If so, don't create "فصل اول".
+        # Double-check: if /units/ links now exist, skip
         try:
             if driver.find_elements(By.XPATH, "//a[contains(@href, '/units/')]"):
                 return
         except WebDriverException:
             pass
 
+        # Look for the add-chapter button
+        add_chapter_btn = None
         try:
-            # Check if there is an Add Chapter button (.mirza-form__button)
-            # This indicates the page is empty and needs a chapter created.
-            add_chapter_btn = driver.find_element(By.CSS_SELECTOR, ".mirza-form__button")
-            self._safe_click(driver, add_chapter_btn)
-            self._wait_for_page_ready(driver)
-            self._pause_between_steps(0.5)
-            
-            # Fill out the chapter title
+            # Try specific button text first
+            buttons = driver.find_elements(By.CSS_SELECTOR, ".mirza-form__button")
+            for btn in buttons:
+                btn_text = (btn.text or '').strip()
+                # Accept button if it contains chapter-related text or is the only button
+                if 'فصل' in btn_text or 'سرفصل' in btn_text or 'اضافه' in btn_text or len(buttons) == 1:
+                    add_chapter_btn = btn
+                    break
+            if not add_chapter_btn and buttons:
+                add_chapter_btn = buttons[0]
+        except WebDriverException:
+            pass
+
+        if not add_chapter_btn:
+            return  # No add-chapter button found, nothing we can do
+
+        before_handles = set(driver.window_handles)
+        self._safe_click(driver, add_chapter_btn)
+        self._switch_to_new_tab(driver, before_handles)
+        self._wait_for_page_ready(driver)
+        self._pause_between_steps(0.5)
+        
+        # Fill out the chapter title
+        try:
             title_input = WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, "#id_title"))
             )
             title_input.clear()
-            title_input.send_keys("فصل اول: " + (course.title_fa or course.title_en or 'مقدمه')[:50])
-            
-            # Save the chapter
-            save_btn = driver.find_element(By.CSS_SELECTOR, ".mirza-form__button--sticky")
+            chapter_name = "فصل اول: " + (course.title_fa or course.title_en or 'مقدمه')[:50]
+            title_input.send_keys(chapter_name)
+        except (TimeoutException, WebDriverException):
+            return  # Can't fill title, give up
+        
+        # Save the chapter
+        try:
+            save_btn = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, ".mirza-form__button--sticky"))
+            )
             driver.execute_script("arguments[0].scrollIntoView(true);", save_btn)
             self._pause_between_steps(0.5)
             self._safe_click(driver, save_btn)
             
+            self._pause_between_steps(2.0)
             self._wait_for_page_ready(driver)
-            self._pause_between_steps(1)
         except (TimeoutException, WebDriverException):
             pass
+        
+        # After saving, MaktabKhooneh should redirect back to /chapters/ listing
+        # Verify we're back on /chapters/ and /units/ links are now available
+        self._pause_between_steps(1)
+        current = driver.current_url or ''
+        if '/chapters/' not in current and '/units/' not in current:
+            # Try going back
+            driver.back()
+            self._wait_for_page_ready(driver)
+            self._pause_between_steps(1)
 
     def _try_click_sections_button(self, driver: webdriver.Firefox) -> bool:
         before_handles = set(driver.window_handles)
