@@ -57,6 +57,12 @@ backend/.venv/bin/uvicorn app.main:app \
   --port 8000 &
 BACKEND_PID=$!
 
+# Celery Worker
+cd backend
+../backend/.venv/bin/celery -A app.core.celery_app worker --loglevel=info &
+CELERY_PID=$!
+cd "$ROOT"
+
 # Frontend
 cd frontend
 npm run start -- -H 0.0.0.0 -p 3000 &
@@ -68,10 +74,11 @@ echo "Frontend:     http://${LOCAL_IP}:3000"
 echo "Backend docs: http://${LOCAL_IP}:8000/docs"
 echo
 echo "Backend PID:  $BACKEND_PID"
+echo "Celery PID:   $CELERY_PID"
 echo "Frontend PID: $FRONTEND_PID"
 echo
-echo "Press Ctrl+C to stop both services."
+echo "Press Ctrl+C to stop all services."
 
-# Trap Ctrl+C to kill both
-trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit 0" SIGINT SIGTERM
+# Trap Ctrl+C to kill all
+trap "kill $BACKEND_PID $CELERY_PID $FRONTEND_PID 2>/dev/null; exit 0" SIGINT SIGTERM
 wait

@@ -13,7 +13,7 @@ __pycache__/
 !.env.example
 
 # Logs
-logs/
+/logs/
 *.log
 
 # Storage artifacts
