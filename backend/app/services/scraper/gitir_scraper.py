@@ -259,10 +259,15 @@ class GitIRScraper(BaseScraper):
         episodes: list[dict[str, Any]] = []
         seen: set[str] = set()
 
-        for node in soup.select('li, p, h3, h4'):
+        for node in soup.select('li, p, h3, h4, .sfl-title'):
             text = normalize_whitespace(node.get_text(' ', strip=True))
             if not text:
                 continue
+                
+            # Filter out UI notifications and ad texts that might start with a number
+            if any(word in text for word in ['اشتراک', 'اعلان', 'پیام', 'تومان', 'خرید', 'دقیقه پیش', 'ساعت پیش', 'هفته قبل']):
+                continue
+                
             match = re.search(r'^(\d{1,3})[\s\-.]+(.+)$', text)
             if not match:
                 continue
