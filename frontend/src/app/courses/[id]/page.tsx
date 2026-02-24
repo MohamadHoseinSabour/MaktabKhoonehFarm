@@ -465,16 +465,6 @@ export default function CourseDetailPage() {
             پردازش کامل (خودکار)
           </button>
 
-          <button
-            className={`btn secondary ${runningGlobalAction === 'ai_course_content' ? 'running' : ''}`}
-            style={{ background: '#f59e0b', color: '#fff', border: 'none' }}
-            disabled={runningGlobalAction !== null}
-            onClick={() => runGlobalAction('ai_course_content', 'AI Write', () => generateCourseAiContent(courseId))}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></svg>
-            تولید سرفصل (SEO)
-          </button>
-
           {/* Status indicator dots */}
           <div style={{ marginRight: 'auto', display: 'flex', gap: '1rem', alignItems: 'center', paddingRight: '0.5rem' }}>
             <StatusDot ok={cookiesOk} label="کوکی سایت" />

@@ -153,9 +153,15 @@ export function EpisodeTable({ episodes, onAction, runningAction }: Props) {
             const showRetry = canRetry(episode)
             const showTranslate = canTranslate(episode)
 
+            const vs = episode.video_status
+            const ss = episode.subtitle_status
+            const isDone = vs === 'uploaded' && (ss === 'uploaded' || ss === 'not_available' || ss === 'skipped')
+            const isActive = ['downloading', 'processing', 'uploading'].includes(vs) || ['downloading', 'processing', 'uploading'].includes(ss)
+            const rowClass = isDone ? 'ep-row-done' : isActive ? 'ep-row-active' : ''
+
             return (
               <Fragment key={episode.id}>
-                <tr key={episode.id}>
+                <tr key={episode.id} className={rowClass}>
                   <td>{episode.episode_number != null ? String(episode.episode_number).padStart(3, '0') : '-'}</td>
                   <td dir="ltr">{episode.title_en ?? '-'}</td>
                   <td dir="rtl">{episode.title_fa ?? '-'}</td>
