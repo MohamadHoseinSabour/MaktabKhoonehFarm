@@ -408,19 +408,22 @@ class FirefoxUploadNavigator:
         except TimeoutException:
             pass
 
-        containers = driver.find_elements(By.CSS_SELECTOR, ".my-16")
+        containers = driver.find_elements(By.CSS_SELECTOR, ".my-16, .my-8, .p-4 > div > div > div")
         for container in containers:
             try:
-                title_el = container.find_element(By.CSS_SELECTOR, ".mt-4")
+                title_el = container.find_element(By.CSS_SELECTOR, ".mt-4, .font-bold.text-black")
                 title_text = (title_el.text or "").strip()
                 if self._titles_match(self._normalize_title_text(title_text), self._normalize_title_text(query)):
-                    try:
-                        btn = container.find_element(By.CSS_SELECTOR, ".mx-4~ .mx-4+ .mx-4 .w-full")
-                    except WebDriverException:
-                        try:
-                            btn = container.find_element(By.XPATH, ".//a[contains(@href, '/chapters/') or contains(normalize-space(.), 'فصل')]")
-                        except WebDriverException:
-                            btn = None
+                    # Instead of relying on nth-child or sibling selectors like .mx-4~ .mx-4+ .mx-4,
+                    # just find the button that links to /chapters/
+                    btn = None
+                    links = container.find_elements(By.TAG_NAME, "a")
+                    for link in links:
+                        href = link.get_attribute("href") or ""
+                        text = (link.text or "").strip()
+                        if "/chapters/" in href or "فصل" in text:
+                            btn = link
+                            break
                     
                     if btn:
                         before_handles = set(driver.window_handles)
