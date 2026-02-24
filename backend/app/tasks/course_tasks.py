@@ -24,6 +24,14 @@ from app.services.task_logger import log_task_sync
 from app.tasks.celery_app import celery_app
 
 
+def _safe_update_state(task, *, state: str, meta: dict) -> None:
+    request = getattr(task, 'request', None)
+    task_id = getattr(request, 'id', None)
+    if not task_id:
+        return
+    task.update_state(state=state, meta=meta)
+
+
 def _episode_sort_key(ep: Episode):
     return (ep.episode_number if ep.episode_number is not None else 10**9, ep.sort_order)
 
@@ -56,7 +64,7 @@ def scrape_course_task(self, course_id: str):
         cid = uuid.UUID(course_id)
         course = db.query(Course).filter(Course.id == cid).first()
         if not course:
-            self.update_state(state=states.FAILURE, meta={'reason': 'Course not found'})
+            _safe_update_state(self, state=states.FAILURE, meta={'reason': 'Course not found'})
             raise Ignore()
 
         course.status = CourseStatus.SCRAPING
@@ -84,7 +92,7 @@ def scrape_course_task(self, course_id: str):
                 status='failed',
                 course_id=course.id,
             )
-        self.update_state(state=states.FAILURE, meta={'reason': str(exc)})
+        _safe_update_state(self, state=states.FAILURE, meta={'reason': str(exc)})
         raise Ignore() from exc
     finally:
         db.close()
@@ -99,7 +107,7 @@ def process_course_task(self, course_id: str):
         cid = uuid.UUID(course_id)
         course = db.query(Course).filter(Course.id == cid).first()
         if not course:
-            self.update_state(state=states.FAILURE, meta={'reason': 'Course not found'})
+            _safe_update_state(self, state=states.FAILURE, meta={'reason': 'Course not found'})
             raise Ignore()
 
         course.status = CourseStatus.DOWNLOADING
@@ -151,7 +159,7 @@ def process_course_task(self, course_id: str):
                 status='failed',
                 course_id=course.id,
             )
-        self.update_state(state=states.FAILURE, meta={'reason': str(exc)})
+        _safe_update_state(self, state=states.FAILURE, meta={'reason': str(exc)})
         raise Ignore() from exc
     finally:
         db.close()
@@ -166,7 +174,7 @@ def process_subtitles_task(self, course_id: str):
         cid = uuid.UUID(course_id)
         course = db.query(Course).filter(Course.id == cid).first()
         if not course:
-            self.update_state(state=states.FAILURE, meta={'reason': 'Course not found'})
+            _safe_update_state(self, state=states.FAILURE, meta={'reason': 'Course not found'})
             raise Ignore()
 
         root = course_storage_root(course)
@@ -212,7 +220,7 @@ def process_subtitles_task(self, course_id: str):
         )
         return {'ok': True, 'processed': processed}
     except Exception as exc:
-        self.update_state(state=states.FAILURE, meta={'reason': str(exc)})
+        _safe_update_state(self, state=states.FAILURE, meta={'reason': str(exc)})
         raise Ignore() from exc
     finally:
         db.close()
@@ -225,7 +233,7 @@ def ai_translate_task(self, course_id: str):
         cid = uuid.UUID(course_id)
         course = db.query(Course).filter(Course.id == cid).first()
         if not course:
-            self.update_state(state=states.FAILURE, meta={'reason': 'Course not found'})
+            _safe_update_state(self, state=states.FAILURE, meta={'reason': 'Course not found'})
             raise Ignore()
 
         translator = AITranslator(db)
@@ -248,7 +256,7 @@ def ai_translate_task(self, course_id: str):
             'episodes': episodes_result,
         }
     except Exception as exc:
-        self.update_state(state=states.FAILURE, meta={'reason': str(exc)})
+        _safe_update_state(self, state=states.FAILURE, meta={'reason': str(exc)})
         raise Ignore() from exc
     finally:
         db.close()

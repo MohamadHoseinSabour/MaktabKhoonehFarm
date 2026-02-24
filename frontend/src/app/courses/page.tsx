@@ -41,10 +41,16 @@ export default function CoursesPage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    const normalizedSourceUrl = sourceUrl.trim()
+    if (!normalizedSourceUrl) {
+      setError('لینک دوره معتبر نیست.')
+      return
+    }
+
     setLoading(true)
     setError(null)
     try {
-      await createCourse(sourceUrl, debugMode)
+      await createCourse(normalizedSourceUrl, debugMode)
       if (mounted.current) {
         setSourceUrl('')
         await load()
