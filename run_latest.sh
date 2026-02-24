@@ -59,7 +59,7 @@ BACKEND_PID=$!
 
 # Celery Worker
 cd backend
-../backend/.venv/bin/celery -A app.core.celery_app worker --loglevel=info &
+../backend/.venv/bin/celery -A app.tasks.celery_app worker --loglevel=info &
 CELERY_PID=$!
 cd "$ROOT"
 
