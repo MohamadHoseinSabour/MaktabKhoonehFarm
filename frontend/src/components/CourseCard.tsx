@@ -30,34 +30,34 @@ export function CourseCard({ course }: Props) {
       <div className="course-thumb">
         {thumbnail ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={thumbnail} alt={course.title_en ?? 'Course thumbnail'} loading="lazy" />
+          <img src={thumbnail} alt={course.title_en ?? 'تصویر دوره'} loading="lazy" />
         ) : (
           <div className="course-thumb-placeholder">
-            <span>No Thumbnail provided</span>
+            <span>بدون تصویر</span>
           </div>
         )}
       </div>
 
       <div className="course-card-header">
-        <h3>{course.title_en ?? 'Untitled Course'}</h3>
+        <h3 dir="ltr" style={{ textAlign: 'left' }}>{course.title_en ?? 'بدون عنوان'}</h3>
         <StatusBadge status={course.status} />
       </div>
 
-      <p style={{ fontWeight: 600, color: 'var(--text)', fontSize: '0.95rem' }} dir="rtl">
+      <p style={{ fontWeight: 600, color: 'var(--text)', fontSize: '0.95rem', marginTop: '0.2rem' }}>
         {course.title_fa ?? 'عنوان فارسی موجود نیست'}
       </p>
 
-      <p className="course-desc" dir="rtl">
+      <p className="course-desc">
         {descFa ?? 'توضیح فارسی هنوز استخراج نشده است.'}
       </p>
-      <p className="course-desc" style={{ fontSize: '0.85rem' }}>
-        {descEn ?? 'No English description extracted yet.'}
+      <p className="course-desc" style={{ fontSize: '0.85rem' }} dir="ltr">
+        {descEn ?? 'توضیح انگلیسی ثبت نشده است.'}
       </p>
 
       <div className="course-meta" style={{ paddingBottom: '0.5rem', borderBottom: '1px solid var(--border)' }}>
-        <span>{course.source_platform ?? 'Unknown'}</span>
-        <span>{course.instructor ?? 'TBD'}</span>
-        <span>{course.lectures_count ?? 0} lectures</span>
+        <span>{course.source_platform ?? 'نامشخص'}</span>
+        <span>{course.instructor ?? 'تعیین نشده'}</span>
+        <span>{course.lectures_count ?? 0} جلسه</span>
       </div>
 
       {uploadSummary && (

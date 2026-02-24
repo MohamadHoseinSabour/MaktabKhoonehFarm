@@ -12,16 +12,16 @@ type FieldMeta = {
 }
 
 const uploadFields: FieldMeta[] = [
-  { key: 'upload_target_url', label: 'Target URL', description: 'Destination website base endpoint URL.' },
-  { key: 'upload_firefox_headless', label: 'Headless Mode', description: 'Run the navigator silently. Set to "true" to enable.' },
-  { key: 'upload_search_input_selector', label: 'Search Input CSS', description: 'CSS Selector to locate the search field.' },
-  { key: 'upload_course_result_xpath_template', label: 'Course Title XPath', description: 'XPath for search results listing.' },
-  { key: 'upload_sections_button_xpath', label: 'Sections Nav XPath', description: 'XPath targeting the episodes page link.' },
-  { key: 'upload_units_button_xpath', label: 'Units Edit XPath', description: 'XPath to enter unit edit context.' },
-  { key: 'upload_login_check_selector', label: 'Auth Check CSS', description: 'Selector active only when user is fully authenticated.' },
-  { key: 'upload_episode_page_indicator_selector', label: 'Episode Wait ID', description: 'Wait confirmation selector after load.' },
-  { key: 'upload_firefox_geckodriver_path', label: 'Driver Path', description: 'Firefox Geckodriver executable abs path.' },
-  { key: 'upload_cookies_json', label: 'Session Cookies', description: 'Auth cookies payload (JSON formatting required)', multiline: true },
+  { key: 'upload_target_url', label: 'آدرس سایت هدف', description: 'مسیر اصلی وبسایتی که پردازش‌ها به آن ارسال می‌شود.' },
+  { key: 'upload_firefox_headless', label: 'حالت مرورگر پنهان', description: 'اجرای مرورگر در پس‌زمینه (بدون رابط گرافیکی). برای فعال‌سازی مقدار "true" تنظیم شود.' },
+  { key: 'upload_search_input_selector', label: 'سلکتور فیلد جستجو', description: 'آدرس CSS Selector برای بخش جستجو سایت.' },
+  { key: 'upload_course_result_xpath_template', label: 'مسیر عنوان دوره (XPath)', description: 'مسیر XPath برای یافتن دوره‌ها در لیست جستجو.' },
+  { key: 'upload_sections_button_xpath', label: 'مسیر لینک فصل‌ها', description: 'مسیر XPath برای دکمه بازکردن صفحات ویدیو یا قسمت‌ها.' },
+  { key: 'upload_units_button_xpath', label: 'ورود به ویرایش واحد', description: 'مسیر XPath برای وارد شدن به زمینه ویرایش آموزش.' },
+  { key: 'upload_login_check_selector', label: 'بررسی وضعیت ورود', description: 'سلکتوری که پس از لاگین بودن ادمین در صفحه دیده می‌شود.' },
+  { key: 'upload_episode_page_indicator_selector', label: 'تایید بارگذاری صفحه قسمت', description: 'سلکتوری که برای اطمینان از لود کامل فرم آپلود بررسی می‌شود.' },
+  { key: 'upload_firefox_geckodriver_path', label: 'مسیر درایور', description: 'مسیر مطلق فایل اجرایی Geckodriver برای فایرفاکس.' },
+  { key: 'upload_cookies_json', label: 'کوکی‌های نشست (Sessions)', description: 'اطلاعات کوکی‌ها برای حفظ ورود به سیستم (فرمت فقط JSON)', multiline: true },
 ]
 
 const defaults: Record<string, string> = {
@@ -115,7 +115,7 @@ export default function AdminSettingsPage() {
       }))
       const updated = await saveSettings(payload)
       setSettings(updated)
-      setValidateMessage('Settings saved successfully.')
+      setValidateMessage('تنظیمات با موفقیت ذخیره شد.')
     } catch (err) {
       setError((err as Error).message)
       throw err
@@ -144,7 +144,7 @@ export default function AdminSettingsPage() {
     <div className="admin-layout">
       <AdminSidebar />
       <section className="panel stack" style={{ padding: '2.5rem' }}>
-        <h1 style={{ marginBottom: '1.5rem' }}>Automation Preferences</h1>
+        <h1 style={{ marginBottom: '1.5rem' }}>تنظیمات اصلی و اتوماسیون</h1>
 
         <div className="grid cols-2" style={{ gap: '2rem' }}>
           {uploadFields.map((field) => {
@@ -165,6 +165,7 @@ export default function AdminSettingsPage() {
                       checked={checked}
                       onChange={(event) => updateSettingValue(field.key, event.target.checked ? 'true' : 'false')}
                       style={{ width: '1.5rem', height: '1.5rem' }}
+                      dir="ltr"
                     />
                   </label>
                 </div>
@@ -173,7 +174,7 @@ export default function AdminSettingsPage() {
 
             return (
               <div key={field.key} className="stack" style={{ gridColumn: field.multiline ? '1 / -1' : 'auto' }}>
-                <div className="stack" style={{ gap: '0.25rem' }}>
+                <div className="stack" style={{ gap: '0.25rem', marginBottom: '0.5rem' }}>
                   <strong style={{ fontSize: '0.95rem' }}>{field.label}</strong>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{field.description}</span>
                 </div>
@@ -183,11 +184,13 @@ export default function AdminSettingsPage() {
                     value={item.value}
                     onChange={(event) => updateSettingValue(field.key, event.target.value)}
                     style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
+                    dir="ltr"
                   />
                 ) : (
                   <input
                     value={item.value}
                     onChange={(event) => updateSettingValue(field.key, event.target.value)}
+                    dir="ltr"
                   />
                 )}
               </div>
@@ -197,14 +200,14 @@ export default function AdminSettingsPage() {
 
         <div className="row" style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
           <button className={`btn ${saving ? 'running' : ''}`} onClick={persist} disabled={saving || validating}>
-            {saving ? 'Saving...' : 'Save Configuration'}
+            {saving ? 'در حال ذخیره...' : 'ذخیره تنظیمات'}
           </button>
           <button className={`btn secondary ${validating ? 'running' : ''}`} onClick={validateCookies} disabled={validating || saving}>
-            {validating ? 'Validating Token...' : 'Verify Integration'}
+            {validating ? 'در حال بررسی...' : 'بررسی اتصال سرور'}
           </button>
 
-          <button className="btn secondary" onClick={() => setShowAdvanced((prev) => !prev)} style={{ marginLeft: 'auto' }}>
-            {showAdvanced ? 'Hide Extras' : 'Advanced Tuning'}
+          <button className="btn secondary" onClick={() => setShowAdvanced((prev) => !prev)} style={{ marginRight: 'auto' }}>
+            {showAdvanced ? 'مخفی کردن پیشرفته' : 'تنظیمات پیشرفته'}
           </button>
         </div>
 
@@ -213,10 +216,10 @@ export default function AdminSettingsPage() {
 
         {showAdvanced && (
           <div className="stack" style={{ marginTop: '2rem', padding: '1.5rem', background: 'var(--bg)', borderRadius: 'var(--radius-md)' }}>
-            <h3 style={{ marginBottom: '1rem' }}>Hidden Configurations</h3>
+            <h3 style={{ marginBottom: '1rem' }}>پیکربندی‌های مخفی و سیستم</h3>
             {otherSettings.map((item, index) => (
               <div key={item.id} className="row" style={{ gap: '1rem' }}>
-                <strong style={{ flex: '0 0 200px', fontSize: '0.9rem' }}>{item.key}</strong>
+                <strong style={{ flex: '0 0 200px', fontSize: '0.9rem' }} dir="ltr">{item.key}</strong>
                 <input
                   style={{ flex: 1 }}
                   value={item.value}
@@ -226,10 +229,11 @@ export default function AdminSettingsPage() {
                     const merged = [...uploadSettings, ...next]
                     setSettings(merged)
                   }}
+                  dir="ltr"
                 />
               </div>
             ))}
-            {otherSettings.length === 0 && <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>No additional parameters recorded.</p>}
+            {otherSettings.length === 0 && <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>هیچ پارامتر اضافه‌ای در پایگاه داده ثبت نشده است.</p>}
           </div>
         )}
       </section>

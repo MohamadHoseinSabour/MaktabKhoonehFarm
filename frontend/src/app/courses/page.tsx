@@ -59,8 +59,8 @@ export default function CoursesPage() {
   return (
     <>
       <section className="panel stack" style={{ marginBottom: '2rem' }}>
-        <h1 style={{ marginBottom: '0.5rem' }}>Add New Course</h1>
-        <p style={{ marginBottom: '1.5rem' }}>Quickly parse and scrape a new course from external platforms by providing its source link.</p>
+        <h1 style={{ marginBottom: '0.5rem' }}>افزودن دوره جدید</h1>
+        <p style={{ marginBottom: '1.5rem' }}>با ثبت لینک منبع، فرآیند دانلود و پردازش یک دوره جدید را به سرعت آغاز کنید.</p>
 
         <form className="stack" onSubmit={submit} style={{ maxWidth: '600px' }}>
           <div className="row" style={{ alignItems: 'flex-start' }}>
@@ -70,11 +70,12 @@ export default function CoursesPage() {
                 required
                 value={sourceUrl}
                 onChange={(event) => setSourceUrl(event.target.value)}
-                placeholder="Ex. https://git.ir/course-link"
+                placeholder="مثال: https://git.ir/course-link"
+                dir="ltr"
               />
             </div>
             <button className={`btn ${loading ? 'running' : ''}`} disabled={loading} style={{ padding: '0.875rem 2rem' }}>
-              {loading ? 'Adding...' : 'Add + Scrape'}
+              {loading ? 'در حال افزودن...' : 'افزودن و پردازش'}
             </button>
           </div>
 
@@ -84,7 +85,7 @@ export default function CoursesPage() {
               checked={debugMode}
               onChange={(event) => setDebugMode(event.target.checked)}
             />
-            <span>Enable debug mode for first-run validation</span>
+            <span>فعال‌سازی حالت دیباگ (پردازش فقط قسمت اول)</span>
           </label>
         </form>
         {error && <div className="operation-banner warn" style={{ marginTop: '1rem', maxWidth: '600px' }}>{error}</div>}
@@ -99,8 +100,8 @@ export default function CoursesPage() {
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ margin: '0 auto 1rem', opacity: 0.5 }}>
               <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
             </svg>
-            <h3>No courses available yet</h3>
-            <p>Add your first course using the form above.</p>
+            <h3>هنوز دوره‌ای در دسترس نیست</h3>
+            <p>اولین دوره خود را با استفاده از فرم بالا اضافه کنید.</p>
           </div>
         )}
       </section>

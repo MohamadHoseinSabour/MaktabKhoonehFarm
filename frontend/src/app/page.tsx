@@ -62,7 +62,7 @@ export default function DashboardPage() {
       <section className="grid cols-3" style={{ marginTop: '1rem' }}>
         <article className="stat" style={{ borderTop: '4px solid var(--accent)' }}>
           <div className="row-between">
-            <h3>Total Courses</h3>
+            <h3>کل دوره‌ها</h3>
             <span style={{ color: 'var(--accent)' }}><CourseIcon /></span>
           </div>
           <h2>{stats?.total_courses ?? '-'}</h2>
@@ -70,7 +70,7 @@ export default function DashboardPage() {
 
         <article className="stat" style={{ borderTop: '4px solid var(--success)' }}>
           <div className="row-between">
-            <h3>Active Downloads</h3>
+            <h3>دانلودهای فعال</h3>
             <span style={{ color: 'var(--success)' }}><DownloadIcon /></span>
           </div>
           <h2>{stats?.active_downloads ?? '-'}</h2>
@@ -78,7 +78,7 @@ export default function DashboardPage() {
 
         <article className="stat" style={{ borderTop: '4px solid var(--warning)' }}>
           <div className="row-between">
-            <h3>Queued Tasks</h3>
+            <h3>عملیات در صف</h3>
             <span style={{ color: 'var(--warning)' }}><TaskIcon /></span>
           </div>
           <h2>{stats?.queued_tasks ?? '-'}</h2>
@@ -87,18 +87,18 @@ export default function DashboardPage() {
 
       {error && (
         <div className="operation-banner warn" style={{ marginTop: '1rem' }}>
-          <strong>Error: </strong>{error}
+          <strong>خطا: </strong>{error}
         </div>
       )}
 
       <section className="panel stack" style={{ marginTop: '1rem', padding: '2rem' }}>
         <div className="row-between" style={{ marginBottom: '1.5rem' }}>
-          <h2 style={{ fontSize: '1.6rem' }}>Recent Courses</h2>
+          <h2 style={{ fontSize: '1.6rem' }}>دوره‌های اخیر</h2>
         </div>
 
         {courses.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
-            No courses found. Head over to the Courses tab to add one.
+            دوره‌ای یافت نشد. برای افزودن به بخش دوره‌ها بروید.
           </div>
         ) : (
           <div className="grid cols-3">

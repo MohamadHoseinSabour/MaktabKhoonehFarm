@@ -82,53 +82,53 @@ export default function AIConfigPage() {
             <ModelIcon />
           </div>
           <div className="stack" style={{ gap: '0.2rem' }}>
-            <h1 style={{ fontSize: '1.8rem', margin: 0 }}>AI Inference Providers</h1>
-            <p style={{ margin: 0, fontSize: '0.95rem' }}>Inject secure keys to enable multi-agent translations and intelligence tasks.</p>
+            <h1 style={{ fontSize: '1.8rem', margin: 0 }}>موتورهای هوش مصنوعی</h1>
+            <p style={{ margin: 0, fontSize: '0.95rem' }}>کلیدهای API امن خود را برای فعال‌سازی ترجمه‌های چندعاملی و تسک‌های متنی وارد کنید.</p>
           </div>
         </div>
 
         <form className="stack" onSubmit={submit} style={{ background: 'var(--bg)', border: '1px solid var(--border)', padding: '1.5rem', borderRadius: 'var(--radius-lg)' }}>
-          <h3 style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>Register API Key</h3>
+          <h3 style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>ثبت کلید API جدید</h3>
           <div className="grid cols-3" style={{ gap: '1rem' }}>
             <div className="stack" style={{ gap: '0.5rem' }}>
-              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Provider Engine</label>
-              <select value={provider} onChange={(event) => setProvider(event.target.value)}>
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>ارائه‌دهنده سرویس (Provider)</label>
+              <select value={provider} onChange={(event) => setProvider(event.target.value)} dir="ltr">
                 <option value="openai">OpenAI Edge</option>
                 <option value="claude">Anthropic Claude</option>
               </select>
             </div>
 
             <div className="stack" style={{ gap: '0.5rem' }}>
-              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Target Model</label>
-              <input value={modelName} onChange={(event) => setModelName(event.target.value)} placeholder="Model (e.g. gpt-4)" required />
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>مدل هدف (Model)</label>
+              <input value={modelName} onChange={(event) => setModelName(event.target.value)} placeholder="مثال: gpt-4o-mini" dir="ltr" required />
             </div>
 
             <div className="stack" style={{ gap: '0.5rem' }}>
-              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Secret Token</label>
-              <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-..." required />
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>توکن اختصاصی (API Key)</label>
+              <input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-..." dir="ltr" required />
             </div>
           </div>
 
-          <button className="btn" style={{ marginTop: '1rem', alignSelf: 'flex-start' }}>Inject Key Securely</button>
+          <button className="btn" style={{ marginTop: '1rem', alignSelf: 'flex-start' }}>ذخیره امن کلید</button>
         </form>
 
-        <h3 style={{ marginTop: '2rem', fontSize: '1.2rem' }}>Configured Identities</h3>
+        <h3 style={{ marginTop: '2rem', fontSize: '1.2rem' }}>پیکربندی‌های ثبت شده</h3>
         <div className="grid cols-3" style={{ gap: '1.5rem' }}>
           {configs.map((cfg) => (
             <article key={cfg.id} className="stat" style={{ borderTop: `4px solid ${cfg.is_active ? 'var(--success)' : 'var(--text-muted)'}` }}>
               <div className="row-between" style={{ marginBottom: '1rem' }}>
                 <span className={`badge ${cfg.is_active ? 'badge-processing' : 'badge-muted'}`} style={{ margin: 0 }}>
-                  {cfg.is_active ? 'Active Node' : 'Suspended'}
+                  {cfg.is_active ? 'گره فعال' : 'غیرفعال'}
                 </span>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Priority {cfg.priority}</span>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>اولویت {cfg.priority}</span>
               </div>
               <h3 style={{ fontSize: '1.1rem', color: 'var(--text)', marginBottom: '0.2rem' }}>{cfg.provider.toUpperCase()}</h3>
-              <p style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: 'var(--accent)' }}>{cfg.model_name}</p>
+              <p style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: 'var(--accent)', textAlign: 'right' }} dir="ltr">{cfg.model_name}</p>
             </article>
           ))}
           {configs.length === 0 && (
             <div style={{ gridColumn: '1 / -1', padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', background: 'var(--bg)', borderRadius: 'var(--radius-md)' }}>
-              No AI identities strictly registered.
+              هیچ موتور هوش مصنوعی ثبت نشده است.
             </div>
           )}
         </div>

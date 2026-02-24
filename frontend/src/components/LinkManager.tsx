@@ -42,34 +42,35 @@ export function LinkManager({ courseId, showExpiredNotice = false }: Props) {
 
   return (
     <section className="panel stack" id="link-manager">
-      <h3>Refresh Links</h3>
+      <h3>بروزرسانی لینک‌های دانلود</h3>
       {showExpiredNotice && (
-        <p className="operation-banner warn">Download links expired. Paste a fresh link batch to continue downloads.</p>
+        <p className="operation-banner warn">لینک‌های دانلود منقضی شده‌اند. لطفاً بلاک جدید لینک‌ها را جهت ادامه دانلود جایگذاری کنید.</p>
       )}
       <form onSubmit={submit} className="stack">
         <textarea
           value={rawLinks}
           onChange={(e) => setRawLinks(e.target.value)}
-          placeholder="Paste all download links"
+          placeholder="تمام لینک‌های دانلود را اینجا الصاق کنید..."
           rows={8}
+          dir="ltr"
           required
         />
-        <button className="btn" disabled={loading}>
-          {loading ? 'Parsing...' : 'Apply Link Batch'}
+        <button className="btn" disabled={loading} style={{ alignSelf: 'flex-start' }}>
+          {loading ? 'در حال پایش...' : 'بروزرسانی لینک‌ها'}
         </button>
       </form>
-      {error && <pre className="console">{error}</pre>}
+      {error && <pre className="console" dir="ltr">{error}</pre>}
       {result && (
         <section className="link-result stack">
           <div className="row">
-            <span className="badge badge-downloaded">Matched: {result.matched}</span>
-            <span className="badge badge-processed">Created: {result.created}</span>
-            <span className="badge badge-error">Unmatched: {result.unmatched}</span>
-            <span className="badge badge-muted">Duplicates: {result.duplicates}</span>
+            <span className="badge badge-downloaded">یافت شده: {result.matched}</span>
+            <span className="badge badge-processed">جدید ایجاد شده: {result.created}</span>
+            <span className="badge badge-error">نامعتبر: {result.unmatched}</span>
+            <span className="badge badge-muted">تکراری: {result.duplicates}</span>
           </div>
           <details>
-            <summary>Show parsed details ({result.details.length})</summary>
-            <pre className="console">
+            <summary style={{ cursor: 'pointer', opacity: 0.8 }}>مشاهده جزئیات کامل خروجی ({result.details.length})</summary>
+            <pre className="console" dir="ltr" style={{ marginTop: '0.5rem' }}>
               {JSON.stringify(
                 result.details.length > 80
                   ? [...result.details.slice(0, 80), { info: `truncated ${result.details.length - 80} more rows` }]

@@ -21,7 +21,25 @@ const statusMap: Record<string, string> = {
   completed: 'badge badge-uploaded',
 }
 
+const statusFa: Record<string, string> = {
+  pending: 'در انتظار',
+  downloading: 'در حال دانلود',
+  downloaded: 'دانلود شده',
+  processing: 'در حال پردازش',
+  processed: 'پردازش شده',
+  uploading: 'درحال آپلود',
+  uploaded: 'آپلود شده',
+  error: 'خطا',
+  skipped: 'رد شده',
+  not_available: 'ناموجود',
+  scraping: 'در حال استخراج',
+  scraped: 'استخراج شده',
+  ready_for_upload: 'آماده آپلود',
+  completed: 'تکمیل شده',
+}
+
 export function StatusBadge({ status }: Props) {
   const className = statusMap[status] ?? 'badge badge-muted'
-  return <span className={className}>{status.replaceAll('_', ' ')}</span>
+  const label = statusFa[status] ?? status.replaceAll('_', ' ')
+  return <span className={className}>{label}</span>
 }

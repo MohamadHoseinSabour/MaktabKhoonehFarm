@@ -264,11 +264,11 @@ export default function CourseDetailPage() {
   }
 
   if (loading) {
-    return <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>Loading course workspace...</div>
+    return <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>در حال بارگذاری اطلاعات دوره...</div>
   }
 
   if (!course) {
-    return <div className="operation-banner warn" style={{ margin: '2rem' }}>{error ?? 'Course not found in database.'}</div>
+    return <div className="operation-banner warn" style={{ margin: '2rem' }}>{error ?? 'دوره در دیتابیس یافت نشد.'}</div>
   }
 
   return (
@@ -276,11 +276,11 @@ export default function CourseDetailPage() {
       <section className="panel stack" style={{ padding: '2.5rem' }}>
         <div className="row-between" style={{ alignItems: 'flex-start' }}>
           <div className="stack" style={{ gap: '0.2rem' }}>
-            <h1 style={{ fontSize: '1.8rem' }}>{course.title_en ?? 'Untitled Course'}</h1>
+            <h1 style={{ fontSize: '1.8rem' }} dir="ltr">{course.title_en ?? 'بدون عنوان'}</h1>
             <p dir="rtl" style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text)' }}>{course.title_fa ?? 'عنوان اصلی نامشخص'}</p>
             <div className="course-meta" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
-              <span className="badge badge-muted">{course.source_platform ?? 'Unknown'}</span>
-              <span className="badge badge-muted">Instructor: {course.instructor ?? 'TBD'}</span>
+              <span className="badge badge-muted">{course.source_platform ?? 'نامشخص'}</span>
+              <span className="badge badge-muted">مدرس: {course.instructor ?? 'تعیین نشده'}</span>
             </div>
           </div>
           <StatusBadge status={course.status} />
@@ -290,14 +290,14 @@ export default function CourseDetailPage() {
 
         {activeEpisode && (
           <div className="operation-banner" style={{ background: 'var(--accent-soft)', borderColor: 'rgba(14,165,233,0.3)', color: 'var(--accent-hover)' }}>
-            <strong>Active Process:</strong> Episode {String(activeEpisode.episode_number ?? '-').padStart(3, '0')} - {activeEpisode.title_en ?? '-'}
-            <span style={{ opacity: 0.8, marginLeft: '0.5rem' }}>&mdash; {episodeCurrentOperation(activeEpisode)}</span>
+            <strong>پردازش فعال:</strong> قسمت {String(activeEpisode.episode_number ?? '-').padStart(3, '0')} - {activeEpisode.title_en ?? '-'}
+            <span style={{ opacity: 0.8, marginRight: '0.5rem' }}>&mdash; {episodeCurrentOperation(activeEpisode)}</span>
           </div>
         )}
 
         {course.debug_mode && (
           <div className="operation-banner warn">
-            <strong>Debug Mode Active:</strong> Only the first episode will be passed through the pipeline.
+            <strong>حالت دیباگ فعال است:</strong> فقط قسمت اول برای پردازش به ربات ارسال خواهد شد.
           </div>
         )}
 
@@ -309,7 +309,7 @@ export default function CourseDetailPage() {
             disabled={runningGlobalAction !== null}
             onClick={() => runGlobalAction('toggle_debug', 'Toggle debug', () => toggleDebug(courseId))}
           >
-            {course.debug_mode ? 'Disable Debug Mode' : 'Enable Debug Mode'}
+            {course.debug_mode ? 'غیرفعال‌سازی دیباگ' : 'فعال‌سازی دیباگ'}
           </button>
 
           <button
@@ -318,7 +318,7 @@ export default function CourseDetailPage() {
             onClick={() => runGlobalAction('start_download', 'Pipeline', () => startProcessing(courseId))}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3" /></svg>
-            Full Pipeline Run
+            شروع پردازش کامل
           </button>
 
           <button
@@ -326,7 +326,7 @@ export default function CourseDetailPage() {
             disabled={runningGlobalAction !== null}
             onClick={() => runGlobalAction('process_subtitles', 'Subtitles', () => processSubtitles(courseId))}
           >
-            Process Subtitles
+            پردازش زیرنویس‌ها
           </button>
 
           <button
@@ -336,7 +336,7 @@ export default function CourseDetailPage() {
             style={{ background: 'var(--success)' }}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 5h16" /><path d="M7 5c0 5 2 9 5 12" /><path d="M17 5c0 3-1 6-3 8" /><path d="M9 17h8" /><path d="M13 13l4 8" /></svg>
-            Auto Translate
+            ترجمه خودکار
           </button>
 
           <button
@@ -346,7 +346,7 @@ export default function CourseDetailPage() {
             onClick={() => runGlobalAction('ai_course_content', 'AI Write', () => generateCourseAiContent(courseId))}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></svg>
-            Generate SEO Description
+            تولید سرفصل (SEO)
           </button>
         </div>
 
@@ -354,17 +354,17 @@ export default function CourseDetailPage() {
       </section>
 
       <section className="panel stack" style={{ padding: '2.5rem' }}>
-        <h2 style={{ fontSize: '1.4rem' }}>Episodes Workspace</h2>
+        <h2 style={{ fontSize: '1.4rem' }}>فهرست قسمت‌ها</h2>
         <EpisodeTable episodes={course.episodes} onAction={runEpisodeAction} runningAction={runningEpisodeAction} />
       </section>
 
       {hasExpiredLinks && (
         <section className="panel stack" style={{ border: '1px solid var(--danger-soft)' }}>
           <div className="operation-banner warn">
-            <strong>Link Expiration Warning:</strong> Origin download links have expired. Please paste a fresh list immediately.
+            <strong>اخطار انقضای لینک:</strong> لینک‌های دانلود منبع منقضی شده‌اند. لطفاً بلافاصله لیست جدیدی را جایگذاری کنید.
           </div>
           <button type="button" className="btn warn" style={{ alignSelf: 'flex-start' }} onClick={jumpToLinkManager}>
-            Revive Links
+            بازنشانی لینک‌ها
           </button>
         </section>
       )}
@@ -374,7 +374,7 @@ export default function CourseDetailPage() {
           <LinkManager courseId={courseId} showExpiredNotice={hasExpiredLinks} />
 
           <section className="panel stack">
-            <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>Generated SEO Syllabus</h3>
+            <h3 style={{ fontSize: '1.2rem', marginBottom: '0.5rem' }}>محتوای تولید شده (سئو)</h3>
             {aiCourseContent ? (
               <div className="stack ai-content" dir="rtl" style={{ background: 'var(--bg)', padding: '1.5rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
                 <div className="stack" style={{ gap: 6 }}>
@@ -404,7 +404,7 @@ export default function CourseDetailPage() {
                 </div>
               </div>
             ) : (
-              <p style={{ color: 'var(--text-muted)' }}>No syllabus generated yet. Run the 'Generate SEO Description' task.</p>
+              <p style={{ color: 'var(--text-muted)' }}>هنوز محتوایی تولید نشده است. روی "تولید سرفصل (SEO)" کلیک کنید.</p>
             )}
           </section>
         </div>
@@ -412,22 +412,22 @@ export default function CourseDetailPage() {
         <div className="stack" style={{ gap: '1.5rem' }}>
           <section className="panel stack" style={{ flex: 1 }}>
             <div className="row-between">
-              <h3 style={{ fontSize: '1.2rem' }}>Raw Export</h3>
+              <h3 style={{ fontSize: '1.2rem' }}>خروجی خام</h3>
               <button className="btn secondary tiny" onClick={copyHtmlPayload} disabled={!aiCourseContentHtml}>
                 {copyHint}
               </button>
             </div>
             <div className="html-copy-box" style={{ flex: 1, minHeight: '200px', cursor: aiCourseContentHtml ? 'copy' : 'default' }} onClick={copyHtmlPayload}>
-              {aiCourseContentHtml ? <pre>{aiCourseContentHtml}</pre> : <div style={{ opacity: 0.5, padding: '2rem', textAlign: 'center' }}>Awaiting structural payload...</div>}
+              {aiCourseContentHtml ? <pre dir="ltr">{aiCourseContentHtml}</pre> : <div style={{ opacity: 0.5, padding: '2rem', textAlign: 'center' }}>در انتظار ساختاردهی خروجی...</div>}
             </div>
           </section>
 
           <div className="panel stack">
             <div className="row-between">
-              <h3 style={{ fontSize: '1.2rem' }}>Event Telemetry</h3>
+              <h3 style={{ fontSize: '1.2rem' }}>وضعیت ارتباط</h3>
               <div className="row">
                 <span className="dot" style={{ background: connected ? 'var(--success)' : 'var(--danger)' }} />
-                <span style={{ fontSize: '0.8rem', color: connected ? 'var(--success)' : 'var(--danger)' }}>{connected ? 'Streaming' : 'Offline'}</span>
+                <span style={{ fontSize: '0.8rem', color: connected ? 'var(--success)' : 'var(--danger)' }}>{connected ? 'متصل' : 'آفلاین'}</span>
               </div>
             </div>
             <DebugConsole connected={connected} messages={messages} />
