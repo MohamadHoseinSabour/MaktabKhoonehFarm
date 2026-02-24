@@ -1489,7 +1489,13 @@ class FirefoxUploadNavigator:
 
     def _create_driver(self) -> webdriver.Firefox:
         options = FirefoxOptions()
-        options.headless = self.config.headless
+        options.add_argument('--headless')
+        
+        # Explicitly support non-snap firefox-esr on Ubuntu servers
+        esr_path = Path('/usr/bin/firefox-esr')
+        if esr_path.exists():
+            options.binary_location = str(esr_path)
+            
         options.set_capability('pageLoadStrategy', 'normal')
         service = (
             FirefoxService(executable_path=self.config.geckodriver_path)
