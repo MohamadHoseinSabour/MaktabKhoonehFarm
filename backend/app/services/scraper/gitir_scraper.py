@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
+from app.core.cookies import load_scraper_cookies
 from app.core.logging import get_logger
 from app.services.scraper.base_scraper import BaseScraper, ScrapedCourseData
 from app.services.scraper.utils import detect_platform_from_url, normalize_whitespace, parse_float, parse_int
@@ -36,7 +37,8 @@ class GitIRScraper(BaseScraper):
         reraise=True,
     )
     def _fetch(self, url: str) -> str:
-        with httpx.Client(timeout=settings.request_timeout_seconds, follow_redirects=True) as client:
+        cookies = load_scraper_cookies()
+        with httpx.Client(timeout=settings.request_timeout_seconds, follow_redirects=True, cookies=cookies) as client:
             response = client.get(url, headers=self.headers)
             response.raise_for_status()
             return response.text

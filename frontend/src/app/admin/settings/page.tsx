@@ -12,6 +12,7 @@ type FieldMeta = {
 }
 
 const uploadFields: FieldMeta[] = [
+  { key: 'scraper_cookies_json', label: 'کوکی‌های سایت مبدأ (اسکرپر)', description: 'کوکی‌های لاگین سایت مبدأ (مثل مکتب‌خونه) برای اسکرپ و دانلود. فرمت JSON — از افزونه مرورگر Export کنید.', multiline: true },
   { key: 'upload_target_url', label: 'آدرس سایت هدف', description: 'مسیر اصلی وبسایتی که پردازش‌ها به آن ارسال می‌شود.' },
   { key: 'upload_firefox_headless', label: 'حالت مرورگر پنهان', description: 'اجرای مرورگر در پس‌زمینه (بدون رابط گرافیکی). برای فعال‌سازی مقدار "true" تنظیم شود.' },
   { key: 'upload_search_input_selector', label: 'سلکتور فیلد جستجو', description: 'آدرس CSS Selector برای بخش جستجو سایت.' },
@@ -25,6 +26,7 @@ const uploadFields: FieldMeta[] = [
 ]
 
 const defaults: Record<string, string> = {
+  scraper_cookies_json: '[]',
   upload_target_url: '',
   upload_firefox_headless: 'false',
   upload_search_input_selector: "input[type='search']",

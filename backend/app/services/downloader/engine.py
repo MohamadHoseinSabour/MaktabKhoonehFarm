@@ -8,6 +8,7 @@ import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
+from app.core.cookies import load_scraper_cookies
 
 ProgressCallback = Callable[[dict], None]
 LogCallback = Callable[[str, dict], None]
@@ -34,7 +35,8 @@ class DownloadEngine:
     )
     def _head(self, url: str, headers: dict[str, str] | None = None) -> requests.Response:
         prepared_headers = self._prepare_headers(url, headers)
-        response = requests.head(url, headers=prepared_headers, timeout=self.timeout, allow_redirects=True)
+        cookies = load_scraper_cookies()
+        response = requests.head(url, headers=prepared_headers, cookies=cookies, timeout=self.timeout, allow_redirects=True)
         response.raise_for_status()
         return response
 
@@ -62,7 +64,8 @@ class DownloadEngine:
             existing = 0
             mode = 'wb'
 
-        with requests.get(url, headers=request_headers, stream=True, timeout=self.timeout, allow_redirects=True) as response:
+        cookies = load_scraper_cookies()
+        with requests.get(url, headers=request_headers, cookies=cookies, stream=True, timeout=self.timeout, allow_redirects=True) as response:
             if response.status_code not in (200, 206):
                 response.raise_for_status()
 

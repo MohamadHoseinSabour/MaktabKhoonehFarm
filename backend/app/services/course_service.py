@@ -3,6 +3,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
+
+from app.core.cookies import load_scraper_cookies
 from slugify import slugify
 from sqlalchemy.orm import Session
 
@@ -111,7 +113,8 @@ def _download_course_thumbnail(url: str | None, root: Path) -> str | None:
         headers['Referer'] = 'https://git.ir/'
 
     try:
-        with httpx.Client(timeout=settings.request_timeout_seconds, follow_redirects=True) as client:
+        cookies = load_scraper_cookies()
+        with httpx.Client(timeout=settings.request_timeout_seconds, follow_redirects=True, cookies=cookies) as client:
             response = client.get(url, headers=headers)
             response.raise_for_status()
             target.write_bytes(response.content)

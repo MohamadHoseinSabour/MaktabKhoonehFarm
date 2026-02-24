@@ -2,6 +2,8 @@ import uuid
 from urllib.parse import urlparse
 
 import requests
+
+from app.core.cookies import load_scraper_cookies
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -134,7 +136,8 @@ def _is_url_accessible(url: str) -> bool:
         headers['Referer'] = 'https://git.ir/'
 
     try:
-        response = requests.head(url, timeout=10, allow_redirects=True, headers=headers)
+        cookies = load_scraper_cookies()
+        response = requests.head(url, timeout=10, allow_redirects=True, headers=headers, cookies=cookies)
         return response.status_code < 400
     except requests.RequestException:
         return False
