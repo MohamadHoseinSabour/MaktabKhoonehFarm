@@ -690,6 +690,54 @@ label {
   transform: none;
 }
 
+.icon-btn.running {
+  background: var(--warning-soft);
+  color: var(--warning);
+  pointer-events: none;
+  animation: spinner 0.8s linear infinite;
+}
+
+/* Episode Status */
+.episode-status {
+  display: inline-block;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius-full);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.episode-status.status-pending {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.episode-status.status-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid rgba(14, 165, 233, 0.25);
+  animation: pulse-glow 2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.episode-status.status-partial {
+  background: var(--warning-soft);
+  color: var(--warning);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.episode-status.status-done {
+  background: var(--success-soft);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.episode-status.status-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
 /* Utilities */
 .stack {
   display: flex;

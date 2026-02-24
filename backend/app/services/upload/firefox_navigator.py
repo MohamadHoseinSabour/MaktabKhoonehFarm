@@ -617,6 +617,8 @@ class FirefoxUploadNavigator:
             local_cover = local_cover.strip()
             if local_cover and Path(local_cover).is_file():
                 cover_input.send_keys(str(Path(local_cover).resolve()))
+                # Give the image time to upload asynchronously before moving on
+                self._pause_between_steps(4.0)
         except WebDriverException:
             pass
                 
@@ -743,7 +745,7 @@ class FirefoxUploadNavigator:
                 EC.presence_of_element_located((By.CSS_SELECTOR, "#id_title"))
             )
             title_input.clear()
-            chapter_name = "فصل اول: " + (course.title_fa or course.title_en or 'مقدمه')[:50]
+            chapter_name = "محتوای دوره"
             title_input.send_keys(chapter_name)
         except (TimeoutException, WebDriverException):
             return  # Can't fill title, give up
