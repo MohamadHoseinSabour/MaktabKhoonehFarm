@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, useRef } from 'react'
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 
 import { DebugConsole } from '@/components/DebugConsole'
@@ -13,18 +13,19 @@ import { useWebSocket } from '@/hooks/useWebSocket'
 import {
   AICourseContent,
   API_BASE,
-  aiTranslate,
   downloadEpisode,
   generateCourseAiContent,
   getCourse,
+  Episode,
   processEpisode,
-  processSubtitles,
   retryEpisode,
   startProcessing,
   toggleDebug,
   translateEpisodeTitle,
   UploadEpisodeResponse,
   uploadEpisode,
+  validateUploadCookies,
+  getSettings,
 } from '@/services/api'
 
 function toWsUrl(base: string, courseId: string) {
@@ -32,7 +33,7 @@ function toWsUrl(base: string, courseId: string) {
   return `${wsBase}/ws/courses/${courseId}/live-logs/`
 }
 
-type GlobalAction = 'toggle_debug' | 'start_download' | 'process_subtitles' | 'ai_translate' | 'ai_course_content'
+type GlobalAction = 'toggle_debug' | 'start_download' | 'auto_pipeline' | 'ai_course_content'
 type EpisodeAction = 'download' | 'process' | 'upload' | 'retry' | 'translate'
 const EXPIRED_LINK_PREFIX = 'LINK_EXPIRED:'
 
@@ -121,10 +122,75 @@ function buildCourseContentHtml(content: AICourseContent): string {
   ].join('\n')
 }
 
+/* ---------- Auto-pipeline: download -> process -> translate -> upload ---------- */
+
+async function runAutoPipelineForEpisode(
+  episode: Episode,
+  onStatus: (msg: string) => void,
+): Promise<{ ok: boolean; error?: string }> {
+  const label = `قسمت ${String(episode.episode_number ?? '-').padStart(3, '0')}`
+
+  // Step 1: Download (only if pending or error)
+  if (['pending', 'error'].includes(episode.video_status)) {
+    onStatus(`${label}: در حال دانلود...`)
+    try {
+      await downloadEpisode(episode.id)
+    } catch (err) {
+      return { ok: false, error: `${label}: خطا در دانلود - ${(err as Error).message}` }
+    }
+  }
+
+  // Step 2: Process (only if downloaded)
+  if (['downloaded', 'pending', 'error'].includes(episode.video_status) || episode.subtitle_status === 'downloaded') {
+    onStatus(`${label}: در حال پردازش...`)
+    try {
+      await processEpisode(episode.id)
+    } catch (err) {
+      return { ok: false, error: `${label}: خطا در پردازش - ${(err as Error).message}` }
+    }
+  }
+
+  // Step 3: Translate title (only if title_fa is missing)
+  if (episode.title_en && !episode.title_fa) {
+    onStatus(`${label}: ترجمه عنوان...`)
+    try {
+      await translateEpisodeTitle(episode.id)
+    } catch {
+      // Non-critical, continue
+    }
+  }
+
+  // Step 4: Upload
+  if (!['uploaded', 'uploading'].includes(episode.video_status)) {
+    onStatus(`${label}: در حال آپلود...`)
+    try {
+      await uploadEpisode(episode.id)
+    } catch (err) {
+      return { ok: false, error: `${label}: خطا در آپلود - ${(err as Error).message}` }
+    }
+  }
+
+  return { ok: true }
+}
+
+/* ---------- Status indicator dots ---------- */
+
+function StatusDot({ ok, label }: { ok: boolean | null; label: string }) {
+  const color = ok === null ? 'var(--text-muted)' : ok ? 'var(--success)' : 'var(--danger)'
+  const text = ok === null ? 'بررسی نشده' : ok ? 'فعال' : 'غیرفعال'
+  return (
+    <div className="row" style={{ gap: 6 }} title={`${label}: ${text}`}>
+      <span className="dot" style={{ background: color, width: 10, height: 10, animation: ok === null ? 'none' : undefined }} />
+      <span style={{ fontSize: '0.75rem', color, fontWeight: 600 }}>{label}</span>
+    </div>
+  )
+}
+
 export default function CourseDetailPage() {
   const params = useParams<{ id: string }>()
   const courseId = params.id
   const mounted = useRef(true)
+  const pipelineAbort = useRef(false)
 
   const [course, setCourse] = useState<Awaited<ReturnType<typeof getCourse>> | null>(null)
   const [loading, setLoading] = useState(true)
@@ -134,12 +200,16 @@ export default function CourseDetailPage() {
   const [runningGlobalAction, setRunningGlobalAction] = useState<GlobalAction | null>(null)
   const [runningEpisodeAction, setRunningEpisodeAction] = useState<{ episodeId: string; action: EpisodeAction } | null>(null)
 
+  // Service status indicators
+  const [cookiesOk, setCookiesOk] = useState<boolean | null>(null)
+  const [aiApiOk, setAiApiOk] = useState<boolean | null>(null)
+
   const { progress } = useCourseProgress(courseId)
 
   const wsUrl = useMemo(() => toWsUrl(API_BASE, courseId), [courseId])
   const { connected, messages } = useWebSocket(wsUrl)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const data = await getCourse(courseId)
       if (mounted.current) {
@@ -151,7 +221,28 @@ export default function CourseDetailPage() {
     } finally {
       if (mounted.current) setLoading(false)
     }
-  }
+  }, [courseId])
+
+  // Check cookie and AI API status on mount
+  useEffect(() => {
+    async function checkServices() {
+      try {
+        const result = await validateUploadCookies()
+        if (mounted.current) setCookiesOk(result.valid)
+      } catch {
+        if (mounted.current) setCookiesOk(false)
+      }
+
+      try {
+        const settings = await getSettings()
+        const aiKey = settings.find((s) => s.key === 'openai_api_key')
+        if (mounted.current) setAiApiOk(!!(aiKey && aiKey.value && aiKey.value.trim().length > 0))
+      } catch {
+        if (mounted.current) setAiApiOk(false)
+      }
+    }
+    void checkServices()
+  }, [])
 
   useEffect(() => {
     mounted.current = true
@@ -163,8 +254,7 @@ export default function CourseDetailPage() {
       mounted.current = false
       clearInterval(timer)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [courseId])
+  }, [courseId, load])
 
   const runGlobalAction = async (action: GlobalAction, title: string, fn: () => Promise<unknown>) => {
     setRunningGlobalAction(action)
@@ -184,6 +274,50 @@ export default function CourseDetailPage() {
       }
     } finally {
       if (mounted.current) setRunningGlobalAction(null)
+    }
+  }
+
+  const runAutoPipeline = async () => {
+    if (!course) return
+    setRunningGlobalAction('auto_pipeline')
+    setError(null)
+    pipelineAbort.current = false
+
+    const episodesQueue = [...course.episodes]
+      .sort((a, b) => (a.episode_number ?? 0) - (b.episode_number ?? 0))
+      .filter((ep) => ep.video_status !== 'uploaded')
+
+    if (episodesQueue.length === 0) {
+      setStatusNote('همه اپیزودها قبلاً آپلود شده‌اند.')
+      setRunningGlobalAction(null)
+      return
+    }
+
+    setStatusNote(`شروع پردازش خودکار ${episodesQueue.length} اپیزود...`)
+
+    let processed = 0
+    let failed = 0
+    for (const episode of episodesQueue) {
+      if (pipelineAbort.current || !mounted.current) break
+
+      const result = await runAutoPipelineForEpisode(episode, (msg) => {
+        if (mounted.current) setStatusNote(msg)
+      })
+
+      if (result.ok) {
+        processed++
+      } else {
+        failed++
+        if (mounted.current) setError(result.error ?? 'خطای ناشناخته')
+      }
+
+      // Reload course data to get updated statuses
+      if (mounted.current) await load()
+    }
+
+    if (mounted.current) {
+      setStatusNote(`پردازش خودکار تمام شد. موفق: ${processed} | ناموفق: ${failed}`)
+      setRunningGlobalAction(null)
     }
   }
 
@@ -303,7 +437,7 @@ export default function CourseDetailPage() {
 
         {statusNote && <div className="status-note">{statusNote}</div>}
 
-        <div className="row" style={{ marginTop: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div className="row" style={{ marginTop: '1rem', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
           <button
             className={`btn secondary ${runningGlobalAction === 'toggle_debug' ? 'running' : ''}`}
             disabled={runningGlobalAction !== null}
@@ -318,25 +452,17 @@ export default function CourseDetailPage() {
             onClick={() => runGlobalAction('start_download', 'Pipeline', () => startProcessing(courseId))}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3" /></svg>
-            شروع پردازش کامل
+            شروع دانلود
           </button>
 
           <button
-            className={`btn secondary ${runningGlobalAction === 'process_subtitles' ? 'running' : ''}`}
+            className={`btn ${runningGlobalAction === 'auto_pipeline' ? 'running' : ''}`}
             disabled={runningGlobalAction !== null}
-            onClick={() => runGlobalAction('process_subtitles', 'Subtitles', () => processSubtitles(courseId))}
-          >
-            پردازش زیرنویس‌ها
-          </button>
-
-          <button
-            className={`btn ${runningGlobalAction === 'ai_translate' ? 'running' : ''}`}
-            disabled={runningGlobalAction !== null}
-            onClick={() => runGlobalAction('ai_translate', 'Translating', () => aiTranslate(courseId))}
+            onClick={runAutoPipeline}
             style={{ background: 'var(--success)' }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 5h16" /><path d="M7 5c0 5 2 9 5 12" /><path d="M17 5c0 3-1 6-3 8" /><path d="M9 17h8" /><path d="M13 13l4 8" /></svg>
-            ترجمه خودکار
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12" /><path d="M7 10l5 5 5-5" /><path d="M5 21h14" /></svg>
+            پردازش کامل (خودکار)
           </button>
 
           <button
@@ -348,6 +474,12 @@ export default function CourseDetailPage() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></svg>
             تولید سرفصل (SEO)
           </button>
+
+          {/* Status indicator dots */}
+          <div style={{ marginRight: 'auto', display: 'flex', gap: '1rem', alignItems: 'center', paddingRight: '0.5rem' }}>
+            <StatusDot ok={cookiesOk} label="کوکی سایت" />
+            <StatusDot ok={aiApiOk} label="API هوش مصنوعی" />
+          </div>
         </div>
 
         {error && <div className="operation-banner warn" style={{ marginTop: '1rem' }}>{error}</div>}
@@ -404,7 +536,7 @@ export default function CourseDetailPage() {
                 </div>
               </div>
             ) : (
-              <p style={{ color: 'var(--text-muted)' }}>هنوز محتوایی تولید نشده است. روی "تولید سرفصل (SEO)" کلیک کنید.</p>
+              <p style={{ color: 'var(--text-muted)' }}>هنوز محتوایی تولید نشده است. روی &quot;تولید سرفصل (SEO)&quot; کلیک کنید.</p>
             )}
           </section>
         </div>

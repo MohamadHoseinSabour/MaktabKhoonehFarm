@@ -23,7 +23,7 @@ export function CourseCard({ course }: Props) {
   const hasUploadSuccess = uploadState === 'completed' && failedTotal === 0 && uploadedTotal > 0
   const hasUploadError = failedTotal > 0 || uploadState === 'failed' || uploadState === 'partial_error'
 
-  const cardClass = `course-card${hasUploadSuccess ? ' upload-success' : ''}${hasUploadError ? ' upload-failed' : ''}`
+  const cardClass = `course-card${hasUploadSuccess ? ' upload-success upload-completed' : ''}${hasUploadError ? ' upload-failed' : ''}`
 
   return (
     <Link href={`/courses/${course.id}`} className={cardClass}>

@@ -330,6 +330,17 @@ p {
   background: linear-gradient(to bottom, var(--panel), var(--danger-soft));
 }
 
+.course-card.upload-completed {
+  opacity: 0.5;
+  filter: grayscale(40%);
+  transition: opacity var(--transition-fast), filter var(--transition-fast);
+}
+
+.course-card.upload-completed:hover {
+  opacity: 0.8;
+  filter: grayscale(0%);
+}
+
 .course-thumb {
   width: 100%;
   aspect-ratio: 16 / 9;
