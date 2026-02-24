@@ -25,6 +25,10 @@ LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 LOCAL_IP="${LOCAL_IP:-127.0.0.1}"
 echo "    → $LOCAL_IP"
 
+# Set the API base URL so Next.js build and runtime can reach the backend
+export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://${LOCAL_IP}:8000}"
+echo "    → API_BASE: $NEXT_PUBLIC_API_BASE_URL"
+
 # ─── 3. Backend setup ───
 echo "[3/6] Preparing backend environment..."
 if [ ! -f "backend/.venv/bin/python" ]; then
