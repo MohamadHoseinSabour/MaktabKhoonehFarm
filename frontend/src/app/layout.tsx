@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { Space_Grotesk, Vazirmatn } from 'next/font/google'
 
 import './globals.css'
+import { TopNav } from '@/components/TopNav'
 
 const headingFont = Space_Grotesk({
   subsets: ['latin'],
@@ -25,15 +26,11 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className={`${headingFont.variable} ${persianFont.variable}`}>
         <div className="bg-grid" />
         <header className="topbar">
-          <div className="brand">
+          <Link href="/" className="brand">
             <span className="dot" />
-            <strong>ACMS</strong>
-          </div>
-          <nav>
-            <Link href="/">Dashboard</Link>
-            <Link href="/courses">Courses</Link>
-            <Link href="/admin/settings">Admin</Link>
-          </nav>
+            <span>ACMS</span>
+          </Link>
+          <TopNav />
         </header>
         <main className="container">{children}</main>
       </body>
