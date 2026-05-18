@@ -20,6 +20,7 @@ from app.services.downloader.link_expiry import (
 )
 from app.services.processor.file_cleaner import clean_filename
 from app.services.processor.subtitle_processor import SubtitleProcessor
+from app.services.processor.video_watermark_processor import VideoWatermarkProcessor
 from app.services.task_logger import log_task_sync
 from app.tasks.celery_app import celery_app
 
@@ -103,6 +104,7 @@ def process_course_task(self, course_id: str):
     db = SessionLocal()
     engine = DownloadEngine()
     validator = FileValidator()
+    watermark_processor = VideoWatermarkProcessor()
     try:
         cid = uuid.UUID(course_id)
         course = db.query(Course).filter(Course.id == cid).first()
@@ -129,7 +131,7 @@ def process_course_task(self, course_id: str):
             )
 
         for episode in episodes:
-            _download_episode_assets(db, engine, validator, course, episode, root)
+            _download_episode_assets(db, engine, validator, watermark_processor, course, episode, root)
 
         failed_assets = any(
             item in {AssetStatus.ERROR}
@@ -169,6 +171,7 @@ def process_course_task(self, course_id: str):
 def process_subtitles_task(self, course_id: str):
     db = SessionLocal()
     processor = SubtitleProcessor()
+    watermark_processor = VideoWatermarkProcessor()
 
     try:
         cid = uuid.UUID(course_id)
@@ -179,51 +182,55 @@ def process_subtitles_task(self, course_id: str):
 
         root = course_storage_root(course)
         processed = 0
+        videos_processed = 0
 
         episodes = db.query(Episode).filter(Episode.course_id == course.id).all()
         for episode in episodes:
-            if episode.subtitle_status != AssetStatus.DOWNLOADED:
-                continue
-            if not episode.subtitle_local_path:
-                continue
+            if episode.subtitle_status == AssetStatus.DOWNLOADED and episode.subtitle_local_path:
+                src = Path(episode.subtitle_local_path)
+                if src.exists():
+                    dst = root / 'subtitles' / 'processed' / f'{src.stem}.vtt'
+                    episode.subtitle_status = AssetStatus.PROCESSING
+                    db.commit()
 
-            src = Path(episode.subtitle_local_path)
-            if not src.exists():
-                continue
+                    try:
+                        processor.process(src, dst)
+                        episode.subtitle_processed_path = str(dst)
+                        episode.subtitle_status = AssetStatus.PROCESSED
+                        processed += 1
+                    except Exception as exc:
+                        episode.subtitle_status = AssetStatus.ERROR
+                        episode.error_message = f'Subtitle processing failed: {exc}'
 
-            dst = root / 'subtitles' / 'processed' / f'{src.stem}.vtt'
-            episode.subtitle_status = AssetStatus.PROCESSING
-            db.commit()
+                    db.commit()
 
-            try:
-                processor.process(src, dst)
-                episode.subtitle_processed_path = str(dst)
-                episode.subtitle_status = AssetStatus.PROCESSED
-                processed += 1
-            except Exception as exc:
-                episode.subtitle_status = AssetStatus.ERROR
-                episode.error_message = f'Subtitle processing failed: {exc}'
+            if _process_episode_video_watermark(db, watermark_processor, course, episode, 'subtitle processing'):
+                videos_processed += 1
 
-            db.commit()
-
-        if processed > 0:
+        if processed > 0 or videos_processed > 0:
             course.status = CourseStatus.READY_FOR_UPLOAD
             db.commit()
 
         log_task_sync(
             db,
             level=LogLevel.INFO,
-            message=f'Processed subtitles: {processed}',
+            message=f'Processed subtitles: {processed}; watermarked videos: {videos_processed}',
             task_type='process_subtitle',
             status='completed',
             course_id=course.id,
         )
-        return {'ok': True, 'processed': processed}
+        return {'ok': True, 'processed': processed, 'videos_processed': videos_processed}
     except Exception as exc:
         _safe_update_state(self, state=states.FAILURE, meta={'reason': str(exc)})
         raise Ignore() from exc
     finally:
         db.close()
+
+
+@celery_app.task(bind=True, name='app.tasks.process_all')
+def process_all_task(self, course_id: str):
+    process_course_task.run(course_id)
+    return process_subtitles_task.run(course_id)
 
 
 @celery_app.task(bind=True, name='app.tasks.ai_translate')
@@ -262,10 +269,74 @@ def ai_translate_task(self, course_id: str):
         db.close()
 
 
+def _process_episode_video_watermark(
+    db,
+    watermark_processor: VideoWatermarkProcessor,
+    course: Course,
+    episode: Episode,
+    context: str,
+) -> bool:
+    if episode.video_status != AssetStatus.DOWNLOADED:
+        return False
+    if not episode.video_local_path:
+        return False
+
+    local_video = Path(episode.video_local_path)
+    if not local_video.exists():
+        log_task_sync(
+            db,
+            level=LogLevel.WARNING,
+            message=f'Episode {episode.episode_number}: video processing skipped because local file is missing',
+            task_type='process_video',
+            status='skipped',
+            course_id=course.id,
+            episode_id=episode.id,
+            details={'path': episode.video_local_path, 'context': context},
+        )
+        return False
+
+    episode.video_status = AssetStatus.PROCESSING
+    db.commit()
+
+    watermark_result = watermark_processor.process(local_video)
+    if watermark_result.get('covered'):
+        episode.video_status = AssetStatus.PROCESSED
+        episode.error_message = None
+        log_task_sync(
+            db,
+            level=LogLevel.INFO,
+            message=f'Episode {episode.episode_number}: top watermark covered in first 30 seconds',
+            task_type='process_video',
+            status='completed',
+            course_id=course.id,
+            episode_id=episode.id,
+            details={**watermark_result, 'context': context},
+        )
+        db.commit()
+        return True
+
+    episode.video_status = AssetStatus.DOWNLOADED
+    reason = watermark_result.get('reason') or 'ffmpeg_failed'
+    episode.error_message = f'Video watermark failed: {reason}'
+    log_task_sync(
+        db,
+        level=LogLevel.WARNING,
+        message=f'Episode {episode.episode_number}: video processing skipped because watermark was not applied',
+        task_type='process_video',
+        status='skipped',
+        course_id=course.id,
+        episode_id=episode.id,
+        details={**watermark_result, 'context': context},
+    )
+    db.commit()
+    return False
+
+
 def _download_episode_assets(
     db,
     engine: DownloadEngine,
     validator: FileValidator,
+    watermark_processor: VideoWatermarkProcessor,
     course: Course,
     episode: Episode,
     root: Path,
@@ -311,6 +382,31 @@ def _download_episode_assets(
                     details={'path': str(target)},
                 )
             else:
+                watermark_result = watermark_processor.process(target)
+                if watermark_result.get('covered'):
+                    log_task_sync(
+                        db,
+                        level=LogLevel.INFO,
+                        message=f'Episode {ep_num}: top watermark covered in first 30 seconds',
+                        task_type='process_video',
+                        status='completed',
+                        course_id=course.id,
+                        episode_id=episode.id,
+                        details=watermark_result,
+                    )
+                    episode.video_status = AssetStatus.PROCESSED
+                else:
+                    log_task_sync(
+                        db,
+                        level=LogLevel.WARNING,
+                        message=f'Episode {ep_num}: video processing skipped because watermark was not applied',
+                        task_type='process_video',
+                        status='skipped',
+                        course_id=course.id,
+                        episode_id=episode.id,
+                        details=watermark_result,
+                    )
+
                 log_task_sync(
                     db,
                     level=LogLevel.INFO,
@@ -350,6 +446,34 @@ def _download_episode_assets(
             course_id=course.id,
             episode_id=episode.id,
         )
+    elif episode.video_status == AssetStatus.DOWNLOADED and episode.video_local_path:
+        local_video = Path(episode.video_local_path)
+        if local_video.exists():
+            watermark_result = watermark_processor.process(local_video)
+            if watermark_result.get('covered'):
+                log_task_sync(
+                    db,
+                    level=LogLevel.INFO,
+                    message=f'Episode {ep_num}: top watermark covered on existing downloaded video',
+                    task_type='process_video',
+                    status='completed',
+                    course_id=course.id,
+                    episode_id=episode.id,
+                    details=watermark_result,
+                )
+                episode.video_status = AssetStatus.PROCESSED
+            else:
+                log_task_sync(
+                    db,
+                    level=LogLevel.WARNING,
+                    message=f'Episode {ep_num}: video processing skipped because watermark was not applied on existing downloaded video',
+                    task_type='process_video',
+                    status='skipped',
+                    course_id=course.id,
+                    episode_id=episode.id,
+                    details=watermark_result,
+                )
+            db.commit()
 
     if episode.subtitle_download_url and episode.subtitle_status in {AssetStatus.PENDING, AssetStatus.ERROR}:
         log_task_sync(

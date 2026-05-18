@@ -21,6 +21,7 @@ from app.services.downloader.link_expiry import (
 )
 from app.services.processor.file_cleaner import clean_filename
 from app.services.processor.subtitle_processor import SubtitleProcessor
+from app.services.processor.video_watermark_processor import VideoWatermarkProcessor
 from app.services.task_logger import log_task_sync
 from app.services.upload import (
     FirefoxUploadNavigator,
@@ -107,7 +108,9 @@ def process_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db))
 
     root = course_storage_root(course)
     processor = SubtitleProcessor()
+    watermark_processor = VideoWatermarkProcessor()
     changes: list[str] = []
+    skipped: dict[str, str] = {}
 
     if episode.subtitle_local_path and Path(episode.subtitle_local_path).exists():
         src = Path(episode.subtitle_local_path)
@@ -125,9 +128,51 @@ def process_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db))
         db.commit()
 
     if episode.video_status == AssetStatus.DOWNLOADED:
-        episode.video_status = AssetStatus.PROCESSED
-        changes.append('video')
-        db.commit()
+        if episode.video_local_path and Path(episode.video_local_path).exists():
+            episode.video_status = AssetStatus.PROCESSING
+            db.commit()
+            watermark_result = watermark_processor.process(Path(episode.video_local_path))
+            if watermark_result.get('covered'):
+                episode.video_status = AssetStatus.PROCESSED
+                episode.error_message = None
+                changes.append('video')
+                log_task_sync(
+                    db,
+                    level=LogLevel.INFO,
+                    message=f'Episode {episode.episode_number}: top watermark covered during episode processing',
+                    task_type='process_video',
+                    status='completed',
+                    course_id=course.id,
+                    episode_id=episode.id,
+                    details=watermark_result,
+                )
+            else:
+                episode.video_status = AssetStatus.DOWNLOADED
+                reason = watermark_result.get('reason') or 'ffmpeg_failed'
+                episode.error_message = f'Video watermark failed: {reason}'
+                skipped['video'] = reason
+                log_task_sync(
+                    db,
+                    level=LogLevel.WARNING,
+                    message=f'Episode {episode.episode_number}: video processing skipped because watermark was not applied',
+                    task_type='process_video',
+                    status='skipped',
+                    course_id=course.id,
+                    episode_id=episode.id,
+                    details=watermark_result,
+                )
+            db.commit()
+        else:
+            skipped['video'] = 'video_missing'
+            log_task_sync(
+                db,
+                level=LogLevel.WARNING,
+                message=f'Episode {episode.episode_number}: video processing skipped because local file is missing',
+                task_type='process_video',
+                status='skipped',
+                course_id=course.id,
+                episode_id=episode.id,
+            )
 
     if episode.exercise_status == AssetStatus.DOWNLOADED:
         episode.exercise_status = AssetStatus.PROCESSED
@@ -136,16 +181,16 @@ def process_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db))
 
     log_task_sync(
         db,
-        level=LogLevel.INFO,
+        level=LogLevel.WARNING if skipped else LogLevel.INFO,
         message=f'Episode processed ({episode.episode_number})',
         task_type='process_episode',
-        status='completed',
+        status='partial' if skipped else 'completed',
         course_id=course.id,
         episode_id=episode.id,
-        details={'changes': changes},
+        details={'changes': changes, 'skipped': skipped},
     )
 
-    return {'episode_id': str(episode.id), 'processed': changes}
+    return {'episode_id': str(episode.id), 'processed': changes, 'skipped': skipped}
 
 
 @router.post('/episodes/{episode_id}/upload/')
@@ -168,7 +213,7 @@ def upload_episode_assets(episode_id: uuid.UUID, db: Session = Depends(get_db)):
     if start_index is None:
         raise HTTPException(status_code=404, detail='Episode not found in ordered list')
 
-    target_episodes = ordered_episodes[start_index:]
+    target_episodes = [ordered_episodes[start_index]]
     if course.debug_mode and target_episodes:
         target_episodes = target_episodes[:1]
 

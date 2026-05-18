@@ -17,9 +17,11 @@ import {
   generateCourseAiContent,
   getCourse,
   Episode,
+  processAll,
   processEpisode,
   retryEpisode,
   startProcessing,
+  aiTranslate as apiAiTranslate,
   toggleDebug,
   translateEpisodeTitle,
   UploadEpisodeResponse,
@@ -33,7 +35,7 @@ function toWsUrl(base: string, courseId: string) {
   return `${wsBase}/ws/courses/${courseId}/live-logs/`
 }
 
-type GlobalAction = 'toggle_debug' | 'start_download' | 'auto_pipeline' | 'ai_course_content'
+type GlobalAction = 'toggle_debug' | 'start_download' | 'start_process' | 'start_translate' | 'start_upload' | 'auto_pipeline' | 'ai_course_content'
 type EpisodeAction = 'download' | 'process' | 'upload' | 'retry' | 'translate'
 const EXPIRED_LINK_PREFIX = 'LINK_EXPIRED:'
 
@@ -277,6 +279,45 @@ export default function CourseDetailPage() {
     }
   }
 
+  const runGlobalUpload = async () => {
+    if (!course) return
+    setRunningGlobalAction('start_upload')
+    setError(null)
+    pipelineAbort.current = false
+
+    const episodesQueue = [...course.episodes]
+      .sort((a, b) => (a.episode_number ?? 0) - (b.episode_number ?? 0))
+      .filter((ep) => ep.video_status !== 'uploaded')
+
+    if (episodesQueue.length === 0) {
+      setStatusNote('همه اپیزودها قبلاً آپلود شده‌اند.')
+      setRunningGlobalAction(null)
+      return
+    }
+
+    setStatusNote(`شروع آپلود ${episodesQueue.length} اپیزود...`)
+    let processed = 0
+    let failed = 0
+
+    for (const episode of episodesQueue) {
+      if (pipelineAbort.current || !mounted.current) break
+      setStatusNote(`آپلود قسمت ${episode.episode_number}...`)
+      try {
+        await uploadEpisode(episode.id)
+        processed++
+      } catch (err) {
+        failed++
+        if (mounted.current) setError(`${episode.episode_number}: ${(err as Error).message}`)
+      }
+      if (mounted.current) await load()
+    }
+
+    if (mounted.current) {
+      setStatusNote(`آپلود گروهی تمام شد. موفق: ${processed} | ناموفق: ${failed}`)
+      setRunningGlobalAction(null)
+    }
+  }
+
   const runAutoPipeline = async () => {
     if (!course) return
     setRunningGlobalAction('auto_pipeline')
@@ -330,7 +371,17 @@ export default function CourseDetailPage() {
       if (action === 'download') {
         await downloadEpisode(episodeId)
       } else if (action === 'process') {
-        await processEpisode(episodeId)
+        const processResult = await processEpisode(episodeId)
+        const processed = processResult.processed ?? []
+        const skipped = processResult.skipped ?? {}
+        if (Object.keys(skipped).length > 0) {
+          const reasonText = Object.entries(skipped)
+            .map(([asset, reason]) => `${asset}: ${reason}`)
+            .join(' | ')
+          if (mounted.current) setStatusNote(`Process partial: ${processed.join(', ') || 'none'} | skipped -> ${reasonText}`)
+          if (mounted.current) await load()
+          return
+        }
       } else if (action === 'upload') {
         const uploadResult: UploadEpisodeResponse = await uploadEpisode(episodeId)
         if (uploadResult.skip_existing) {
@@ -446,22 +497,52 @@ export default function CourseDetailPage() {
             {course.debug_mode ? 'غیرفعال‌سازی دیباگ' : 'فعال‌سازی دیباگ'}
           </button>
 
-          <button
-            className={`btn ${runningGlobalAction === 'start_download' ? 'running' : ''}`}
-            disabled={runningGlobalAction !== null}
-            onClick={() => runGlobalAction('start_download', 'Pipeline', () => startProcessing(courseId))}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3" /></svg>
-            شروع دانلود
-          </button>
+          <div className="row" style={{ gap: '0.5rem', background: 'var(--panel)', padding: '0.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+            <button
+              className={`icon-btn secondary ${runningGlobalAction === 'start_download' ? 'running' : ''}`}
+              title="شروع دانلود ویدیوها"
+              disabled={runningGlobalAction !== null}
+              onClick={() => runGlobalAction('start_download', 'Pipeline', () => startProcessing(courseId))}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+            </button>
+
+            <button
+              className={`icon-btn secondary ${runningGlobalAction === 'start_process' ? 'running' : ''}`}
+              title="پردازش و استخراج زیرنویس"
+              disabled={runningGlobalAction !== null}
+              onClick={() => runGlobalAction('start_process', 'Process All', () => processAll(courseId))}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+            </button>
+
+            <button
+              className={`icon-btn secondary ${runningGlobalAction === 'start_translate' ? 'running' : ''}`}
+              title="ترجمه خودکار عناوین"
+              disabled={runningGlobalAction !== null}
+              onClick={() => runGlobalAction('start_translate', 'AI Translate', () => apiAiTranslate(courseId))}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></svg>
+            </button>
+
+            <button
+              className={`icon-btn secondary ${runningGlobalAction === 'start_upload' ? 'running' : ''}`}
+              title="آپلود ویدیوها به سرور مقصد"
+              disabled={runningGlobalAction !== null}
+              onClick={runGlobalUpload}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+            </button>
+          </div>
 
           <button
             className={`btn ${runningGlobalAction === 'auto_pipeline' ? 'running' : ''}`}
             disabled={runningGlobalAction !== null}
             onClick={runAutoPipeline}
             style={{ background: 'var(--success)' }}
+            title="اجرای متوالی تمام مراحل (دانلود، پردازش، ترجمه، آپلود)"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12" /><path d="M7 10l5 5 5-5" /><path d="M5 21h14" /></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v12" /><path d="M7 10l5 5 5-5" /><path d="M5 21h14" /></svg>
             پردازش کامل (خودکار)
           </button>
 

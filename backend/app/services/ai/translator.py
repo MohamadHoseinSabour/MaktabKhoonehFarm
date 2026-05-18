@@ -59,23 +59,10 @@ class AITranslator:
         pending = [ep for ep in episodes if ep.title_en and not ep.title_fa]
         translated = 0
 
-        for i in range(0, len(pending), batch_size):
-            chunk = pending[i : i + batch_size]
-            prompt_payload = [{'number': ep.episode_number, 'title': ep.title_en} for ep in chunk]
-            prompt = self.prompt_manager.build_episode_batch_prompt(course, prompt_payload)
-            response = self._call_with_cache(provider, f'ep:{course.id}:{i}', prompt)
-
-            try:
-                parsed = json.loads(response)
-            except json.JSONDecodeError:
-                logger.warning('Episode translation returned non-JSON payload')
-                continue
-
-            by_number = {item.get('number'): item.get('title_fa') for item in parsed if isinstance(item, dict)}
-            for ep in chunk:
-                if title_fa := by_number.get(ep.episode_number):
-                    ep.title_fa = title_fa
-                    translated += 1
+        for ep in pending:
+            result = self.translate_episode_title(course, ep)
+            if result.get('translated'):
+                translated += 1
 
         self.db.commit()
         return {'translated': translated, 'total_pending': len(pending)}

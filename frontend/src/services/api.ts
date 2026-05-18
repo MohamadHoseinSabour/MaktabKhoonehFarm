@@ -190,6 +190,12 @@ export async function processSubtitles(courseId: string) {
   })
 }
 
+export async function processAll(courseId: string) {
+  return request<{ task_id: string; status: string }>(`/api/courses/${courseId}/process-all/`, {
+    method: 'POST',
+  })
+}
+
 export async function aiTranslate(courseId: string) {
   return request<{ task_id: string; status: string }>(`/api/courses/${courseId}/ai-translate/`, {
     method: 'POST',
@@ -213,7 +219,7 @@ export async function downloadEpisode(episodeId: string) {
 }
 
 export async function processEpisode(episodeId: string) {
-  return request<{ episode_id: string; processed: string[] }>(`/api/episodes/${episodeId}/process/`, {
+  return request<{ episode_id: string; processed: string[]; skipped?: Record<string, string> }>(`/api/episodes/${episodeId}/process/`, {
     method: 'POST',
   })
 }

@@ -9,7 +9,7 @@ from app.models.enums import LogLevel
 from app.services.local_runner import run_in_background
 from app.services.task_dispatcher import celery_worker_available
 from app.services.task_logger import log_task_sync
-from app.tasks.course_tasks import ai_translate_task, process_course_task, process_subtitles_task
+from app.tasks.course_tasks import ai_translate_task, process_all_task, process_course_task, process_subtitles_task
 
 router = APIRouter()
 
@@ -73,6 +73,37 @@ def start_subtitle_processing(course_id: uuid.UUID, db: Session = Depends(get_db
         course_id=course.id,
     )
     run_in_background(lambda: process_subtitles_task.run(str(course_id)), name=f'acms-subtitle-{course.id}')
+    return {'status': 'queued', 'mode': 'local_background'}
+
+
+@router.post('/courses/{course_id}/process-all/')
+def start_full_processing(course_id: uuid.UUID, db: Session = Depends(get_db)):
+    course = db.query(Course).filter(Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail='Course not found')
+
+    if celery_worker_available():
+        task = process_all_task.delay(str(course_id))
+        log_task_sync(
+            db,
+            level=LogLevel.INFO,
+            message='Full processing pipeline queued (video + subtitle)',
+            task_type='process_all',
+            status='queued',
+            course_id=course.id,
+            details={'task_id': task.id},
+        )
+        return {'task_id': task.id, 'status': 'queued', 'mode': 'celery'}
+
+    log_task_sync(
+        db,
+        level=LogLevel.WARNING,
+        message='No Celery worker detected; running full processing pipeline in local background worker.',
+        task_type='process_all',
+        status='queued',
+        course_id=course.id,
+    )
+    run_in_background(lambda: process_all_task.run(str(course_id)), name=f'acms-process-all-{course.id}')
     return {'status': 'queued', 'mode': 'local_background'}
 
 

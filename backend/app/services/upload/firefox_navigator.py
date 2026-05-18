@@ -597,7 +597,8 @@ class FirefoxUploadNavigator:
             driver.switch_to.frame(desc_iframe)
             desc_body = driver.find_element(By.TAG_NAME, "body")
             desc_body.clear()
-            desc_body.send_keys(title + " - این دوره به صورت خودکار ایجاد شده است.\n\n" + (course.description or "توضیحات دوره"))
+            course_desc = getattr(course, 'description_fa', '') or getattr(course, 'description_en', '')
+            desc_body.send_keys(title + " - این دوره به صورت خودکار ایجاد شده است.\n\n" + (course_desc or "توضیحات دوره"))
             driver.switch_to.default_content()
         except WebDriverException:
             driver.switch_to.default_content()
@@ -897,6 +898,10 @@ class FirefoxUploadNavigator:
         create_locators = [
             (By.XPATH, "//a[contains(@href, 'unit_type=lecture') and contains(normalize-space(.), 'جلسه')]"),
             (By.XPATH, "//a[contains(@href, 'unit_type=lecture')]"),
+            (By.XPATH, "//a[contains(normalize-space(.), 'درس جدید')]"),
+            (By.XPATH, "//a[contains(normalize-space(.), 'اضافه کردن جلسه')]"),
+            (By.CSS_SELECTOR, "a.mirza-button--primary[href*='unit_type=lecture']"),
+            (By.XPATH, "//a[contains(@href, '/units/create-draft') or contains(@href, 'create')]"),
         ]
         wait = WebDriverWait(driver, self.ELEMENT_WAIT_SECONDS)
         for by, value in create_locators:

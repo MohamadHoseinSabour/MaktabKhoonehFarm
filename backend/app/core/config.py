@@ -67,10 +67,23 @@ class Settings(BaseSettings):
     @field_validator('storage_path')
     @classmethod
     def resolve_storage_path(cls, value: str) -> str:
-        path = Path(value)
+        normalized = value.strip()
+        path = Path(normalized)
         if path.is_absolute():
             return str(path)
         return str((PROJECT_ROOT / path).resolve())
+
+    @field_validator('debug', mode='before')
+    @classmethod
+    def normalize_debug(cls, value):
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {'release', 'prod', 'production'}:
+                return False
+            if normalized in {'debug', 'dev', 'development'}:
+                return True
+            return normalized
+        return value
 
 
 settings = Settings()

@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "C:\Users\mmhhs\OneDrive\Documents\GitHub\MaktabKhoonehFarm\backend\test_upload.py", line 33, in test_course_creation
+    print(f"Triggering upload for non-existent course: '{dummy_course.title_fa}'")
+  File "C:\Users\mmhhs\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 44-47: character maps to <undefined>
+
+Error occurred: 'charmap' codec can't encode characters in position 44-47: character maps to <undefined>
