@@ -1,12 +1,16 @@
 ﻿import json
+import html
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+import mimetypes
 from pathlib import Path
 import re
 import time
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
+from bs4 import BeautifulSoup
+import requests
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.common.by import By
@@ -46,6 +50,1029 @@ class UploadAutomationConfig:
     login_check_selector: str
     episode_page_indicator_selector: str
     geckodriver_path: str | None
+
+
+@dataclass
+class MirzaCourseRoute:
+    url: str
+    created: bool
+    source: str
+    course_id: str | None = None
+
+
+@dataclass
+class MarketplaceChapter:
+    id: str
+    title: str
+    units_url: str
+    edit_url: str | None = None
+
+
+@dataclass
+class MarketplaceUnit:
+    id: str
+    title: str
+    edit_url: str
+
+
+class MirzaApiClient:
+    REQUEST_TIMEOUT_SECONDS = 180
+    REQUEST_ATTEMPTS = 3
+    DEFAULT_TOPIC_TITLE = 'ChatGPT'
+
+    def __init__(self, config: UploadAutomationConfig) -> None:
+        self.config = config
+        self.session = requests.Session()
+        self.target_parts = urlsplit(config.target_url)
+        self.target_host = (self.target_parts.hostname or '').strip()
+        self.target_base = f'{self.target_parts.scheme or "https"}://{self.target_host}'
+        self.mooc_base = 'https://maktabkhooneh.org'
+        self.token: str | None = None
+        self._load_cookies(config.cookies_json)
+
+    def validate_session(self) -> dict[str, Any]:
+        data = self._request_json('GET', '/courses/teacher-courses/', params={'page': 1})
+        return {
+            'valid': True,
+            'message': 'Upload API session is valid.',
+            'courses_count': self._payload_count(data),
+        }
+
+    def resolve_course_route(self, course: Course, title_matches: Any) -> MirzaCourseRoute:
+        query = (course.title_fa or course.title_en or course.slug or '').strip()
+        if not query:
+            raise UploadConfigurationError('Course title is empty and cannot be used for search.')
+
+        existing = self._find_teacher_course(query, title_matches)
+        if existing:
+            course_id = self._extract_course_id(existing)
+            chapters_url = self._extract_course_url(existing, course_id, 'chapters')
+            if chapters_url:
+                return MirzaCourseRoute(url=chapters_url, created=False, source='teacher-courses-api', course_id=course_id)
+
+        draft = self._create_draft(course)
+        redirect_url = str(draft.get('redirect_url') or draft.get('url') or '').strip()
+        if not redirect_url:
+            raise UploadConfigurationError('Course draft API did not return redirect_url.')
+        return MirzaCourseRoute(
+            url=urljoin(self.config.target_url, redirect_url),
+            created=True,
+            source='draft-api',
+            course_id=self._extract_course_id(draft),
+        )
+
+    def _load_cookies(self, raw: str) -> None:
+        try:
+            cookies = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise UploadConfigurationError('Cookies JSON is invalid.') from exc
+        if not isinstance(cookies, list):
+            raise UploadConfigurationError('Cookies JSON must be a list.')
+
+        has_target_cookie = False
+        for cookie in cookies:
+            if not isinstance(cookie, dict):
+                continue
+            name = str(cookie.get('name') or '').strip()
+            value = cookie.get('value')
+            if not name or value is None:
+                continue
+            domain = str(cookie.get('domain') or '').strip().lstrip('.')
+            path = str(cookie.get('path') or '/')
+            if domain and self._domain_matches(self.target_host, domain):
+                has_target_cookie = True
+            if name == 'token':
+                self.token = str(value)
+            cookie_kwargs: dict[str, str] = {'path': path}
+            if domain:
+                cookie_kwargs['domain'] = domain
+            self.session.cookies.set(name, str(value), **cookie_kwargs)
+
+        if not has_target_cookie:
+            raise UploadConfigurationError(
+                f'No cookie domain matches target host "{self.target_host}". '
+                'Export cookies while logged in on maktabkhooneh/mirza and save them in upload_cookies_json.'
+            )
+
+    def _request_json(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        base_url: str | None = None,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> Any:
+        base = (base_url or f'{self.target_base}/api/v1').rstrip('/')
+        url = f'{base}/{endpoint.lstrip("/")}'
+        headers = {'Accept': 'application/json'}
+        if self.token:
+            headers['Authorization'] = f'Bearer {self.token}'
+
+        response = None
+        last_error: requests.RequestException | None = None
+        for attempt in range(1, self.REQUEST_ATTEMPTS + 1):
+            try:
+                response = self.session.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    headers=headers,
+                    timeout=self.REQUEST_TIMEOUT_SECONDS,
+                    allow_redirects=False,
+                )
+                break
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < self.REQUEST_ATTEMPTS:
+                    time.sleep(min(5 * attempt, 15))
+
+        if response is None:
+            raise UploadConfigurationError(f'Mirza API request failed after retries: {last_error}') from last_error
+        if response.status_code in {301, 302, 303, 307, 308}:
+            location = response.headers.get('Location', '')
+            if self._is_login_location(location):
+                raise UploadAuthExpiredError(self._auth_error(location))
+        if response.status_code in {401, 403}:
+            raise UploadAuthExpiredError(self._auth_error(url))
+        if response.status_code >= 400:
+            raise UploadConfigurationError(
+                f'Mirza API request failed: {response.status_code} {response.text[:300]}'
+            )
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise UploadConfigurationError(f'Mirza API did not return JSON. url={url}') from exc
+
+    def _find_teacher_course(self, query: str, title_matches: Any) -> dict[str, Any] | None:
+        normalized_query = self._normalize_title_text(query)
+        seen_ids: set[str] = set()
+        for params in ({'search': query, 'page': 1}, {'page': 1}):
+            data = self._request_json('GET', '/courses/teacher-courses/', params=params)
+            for item in self._iter_items(data):
+                item_id = str(item.get('id') or item.get('course_id') or item.get('pk') or '')
+                if item_id and item_id in seen_ids:
+                    continue
+                if item_id:
+                    seen_ids.add(item_id)
+                for title in self._title_candidates(item):
+                    if title_matches(self._normalize_title_text(title), normalized_query):
+                        return item
+        return None
+
+    def _create_draft(self, course: Course) -> dict[str, Any]:
+        title = self._course_draft_title(course)
+        topic_id = self._select_topic_id(title)
+        payload = {'title': title, 'main_topic': topic_id}
+        data = self._request_json('POST', '/courses/draft/', json_body=payload)
+        if not isinstance(data, dict):
+            raise UploadConfigurationError('Course draft API returned an unexpected payload.')
+        return data
+
+    def _select_topic_id(self, query: str) -> int:
+        preferred_topic = self._find_topic_id(self.DEFAULT_TOPIC_TITLE, exact_title=self.DEFAULT_TOPIC_TITLE)
+        if preferred_topic is not None:
+            return preferred_topic
+
+        preferred_topic = self._find_topic_id(self.DEFAULT_TOPIC_TITLE)
+        if preferred_topic is not None:
+            return preferred_topic
+
+        data = self._request_json(
+            'GET',
+            '/courses/topics/',
+            base_url=f'{self.mooc_base}/api/v1',
+            params={'page': 1, 'search': query},
+        )
+        items = list(self._iter_items(data))
+        if not items:
+            data = self._request_json('GET', '/courses/topics/', base_url=f'{self.mooc_base}/api/v1', params={'page': 1})
+            items = list(self._iter_items(data))
+        for item in items:
+            raw_id = item.get('id')
+            if raw_id is not None:
+                return int(raw_id)
+        raise UploadConfigurationError('Could not resolve a main_topic from Maktab topics API.')
+
+    def _find_topic_id(self, query: str, *, exact_title: str | None = None) -> int | None:
+        data = self._request_json(
+            'GET',
+            '/courses/topics/',
+            base_url=f'{self.mooc_base}/api/v1',
+            params={'page': 1, 'search': query},
+        )
+        items = list(self._iter_items(data))
+        if exact_title:
+            normalized = self._normalize_title_text(exact_title)
+            for item in items:
+                title = self._normalize_title_text(str(item.get('title') or item.get('name') or ''))
+                if title == normalized and item.get('id') is not None:
+                    return int(item['id'])
+        for item in items:
+            if item.get('id') is not None:
+                return int(item['id'])
+        return None
+
+    def _course_draft_title(self, course: Course) -> str:
+        title_fa = (course.title_fa or '').strip()
+        title_en = (course.title_en or '').strip()
+        if title_fa and title_en and self._normalize_title_text(title_fa) != self._normalize_title_text(title_en):
+            return f'{title_fa} ({title_en})'
+        return (title_fa or title_en or course.slug or '').strip()
+
+    def _extract_course_url(self, item: dict[str, Any], course_id: str | None, section: str) -> str | None:
+        for key in ('chapters_url', 'chapter_url', 'url', 'absolute_url', 'redirect_url', 'edit_url'):
+            raw = str(item.get(key) or '').strip()
+            if raw and f'/{section}/' in raw:
+                return urljoin(self.config.target_url, raw)
+        if course_id:
+            return urljoin(self.config.target_url, f'/courses/{course_id}/{section}/')
+        return None
+
+    def _extract_course_id(self, item: dict[str, Any]) -> str | None:
+        for key in ('id', 'course_id', 'pk'):
+            value = item.get(key)
+            if value is not None:
+                return str(value)
+        for key in ('redirect_url', 'url', 'absolute_url', 'edit_url'):
+            match = re.search(r'/courses/([^/]+)/', str(item.get(key) or ''))
+            if match:
+                return match.group(1)
+        return None
+
+    def _iter_items(self, payload: Any) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in ('results', 'data', 'items', 'courses'):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return [payload]
+
+    def _payload_count(self, payload: Any) -> int | None:
+        if isinstance(payload, dict) and isinstance(payload.get('count'), int):
+            return payload['count']
+        items = self._iter_items(payload)
+        return len(items) if items else None
+
+    def _title_candidates(self, item: dict[str, Any]) -> list[str]:
+        values: list[str] = []
+        for key in ('title', 'name', 'title_fa', 'title_en', 'course_title'):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                values.append(value.strip())
+        return values
+
+    def _normalize_title_text(self, value: str) -> str:
+        normalized = (value or '').strip().lower()
+        normalized = normalized.replace('ي', 'ی').replace('ك', 'ک')
+        normalized = re.sub(r'[\u200c\u200f\u202a-\u202e]', ' ', normalized)
+        normalized = re.sub(r'\s+', ' ', normalized)
+        normalized = re.sub(r'[^\w\s\u0600-\u06FF\-\(\)]', '', normalized)
+        return normalized.strip()
+
+    def _domain_matches(self, host: str, domain: str) -> bool:
+        clean_host = (host or '').strip().lower().lstrip('.')
+        clean_domain = (domain or '').strip().lower().lstrip('.')
+        return bool(clean_host and clean_domain) and (
+            clean_host == clean_domain
+            or clean_host.endswith(f'.{clean_domain}')
+            or clean_domain.endswith(f'.{clean_host}')
+        )
+
+    def _is_login_location(self, location: str) -> bool:
+        lowered = (location or '').lower()
+        return any(token in lowered for token in ('login', 'signin', 'auth'))
+
+    def _auth_error(self, current_url: str) -> str:
+        return f'Mirza API auth failed. Update upload_cookies_json/token from a logged-in mirza session. url={current_url}'
+
+
+class MaktabMarketplaceClient:
+    CHAPTER_TITLE = 'ویدیو های دوره'
+    REQUEST_TIMEOUT_SECONDS = 180
+
+    def __init__(self, config: UploadAutomationConfig) -> None:
+        self.config = config
+        self.base_url = 'https://maktabkhooneh.org'
+        self.session = requests.Session()
+        self.token: str | None = None
+        self._load_cookies(config.cookies_json)
+
+    def upload_course_episodes(
+        self,
+        course: Course,
+        episodes: list[Episode],
+        route: MirzaCourseRoute,
+    ) -> dict[str, Any]:
+        course_id = route.course_id
+        if not course_id:
+            raise UploadConfigurationError('Could not resolve Maktab course id for marketplace upload.')
+
+        detail_result = self.ensure_course_details(course_id, course, episodes)
+        chapter = self.ensure_video_chapter(course_id)
+        results = [
+            self.upload_episode(course_id, chapter, episode)
+            for episode in sorted(episodes, key=lambda item: (item.episode_number or 0, item.sort_order or 0))
+        ]
+        self._sync_unit_order(chapter, list(course.episodes or []))
+        return {
+            'ok': True,
+            'query': (course.title_fa or course.title_en or course.slug or '').strip(),
+            'headless': False,
+            'current_url': self._absolute(chapter.units_url),
+            'browser_kept_open': False,
+            'results': results,
+            'processed_count': len(results),
+            'units_list_url': self._absolute(chapter.units_url),
+            'used_cached_units_url': False,
+            'api_route_source': route.source,
+            'upload_transport': 'maktab-marketplace-api',
+            'chapter_id': chapter.id,
+            'chapter_title': chapter.title,
+            'course_detail_result': detail_result,
+        }
+
+    def ensure_course_details(self, course_id: str, course: Course, episodes: list[Episode]) -> dict[str, Any]:
+        detail_path = f'/marketplace/teacher/course/{course_id}/detail/edit'
+        soup = self._get_soup(detail_path)
+        csrf = self._csrf_from_soup(soup)
+        fields = self._course_detail_form_fields(soup, csrf, course)
+        thumbnail_path = self._course_thumbnail_file_path(course)
+        file_handles: list[Any] = []
+        try:
+            if thumbnail_path:
+                handle = open(thumbnail_path, 'rb')
+                file_handles.append(handle)
+                fields.append(
+                    (
+                        'image',
+                        (
+                            Path(thumbnail_path).name,
+                            handle,
+                            mimetypes.guess_type(thumbnail_path)[0] or 'image/jpeg',
+                        ),
+                    )
+                )
+            response = self._post_form(detail_path, {}, files=fields)
+        finally:
+            for handle in file_handles:
+                handle.close()
+
+        teaser_result = self._upload_first_episode_as_teaser(course_id, episodes)
+        return {
+            'detail_url': self._absolute(detail_path),
+            'form_status_code': response.status_code,
+            'thumbnail_uploaded': bool(thumbnail_path),
+            'thumbnail_path': thumbnail_path,
+            'description_updated': True,
+            'prerequisites_updated': True,
+            'price': '99000',
+            'teaser': teaser_result,
+        }
+
+    def ensure_video_chapter(self, course_id: str) -> MarketplaceChapter:
+        chapters = self._list_chapters(course_id)
+        normalized_target = self._normalize_title_text(self.CHAPTER_TITLE)
+        for chapter in chapters:
+            if self._normalize_title_text(chapter.title) == normalized_target:
+                return chapter
+
+        if len(chapters) == 1 and chapters[0].edit_url:
+            return self._rename_chapter(course_id, chapters[0], self.CHAPTER_TITLE)
+
+        return self._create_chapter(course_id, self.CHAPTER_TITLE)
+
+    def upload_episode(self, course_id: str, chapter: MarketplaceChapter, episode: Episode) -> dict[str, Any]:
+        outcome: dict[str, Any] = {
+            'episode_id': str(episode.id),
+            'episode_number': episode.episode_number,
+            'episode_title': (episode.title_fa or episode.title_en or '').strip(),
+            'result': 'error',
+            'unit_action': None,
+            'error': None,
+            'form_filled': False,
+            'form_title': None,
+            'subtitle_attached': False,
+            'subtitle_path': None,
+            'subtitle_missing_reason': None,
+            'video_file': None,
+            'progress': None,
+            'returned_to_units': True,
+            'units_list_url': self._absolute(chapter.units_url),
+            'current_url': self._absolute(chapter.units_url),
+        }
+
+        video_file = self._episode_video_file_path(episode)
+        outcome['video_file'] = video_file
+        if not video_file:
+            outcome['result'] = 'skipped_missing_video'
+            outcome['error'] = 'Video file was not found for this episode.'
+            return outcome
+
+        unit = self._find_unit(chapter, episode)
+        if unit is None:
+            unit = self._create_lecture_unit(course_id, chapter, episode)
+            outcome['unit_action'] = 'create_new'
+            outcome['form_filled'] = True
+            outcome['form_title'] = self._episode_form_title(episode)
+            subtitle_path = self._episode_subtitle_vtt_path(episode)
+            outcome['subtitle_path'] = subtitle_path
+            outcome['subtitle_attached'] = bool(subtitle_path)
+            outcome['subtitle_missing_reason'] = None if subtitle_path else 'processed_vtt_not_found'
+        else:
+            outcome['unit_action'] = 'update_existing'
+            outcome['matched_title'] = unit.title
+
+        self._upload_video_to_unit(unit, video_file)
+        outcome['result'] = 'uploaded'
+        outcome['progress'] = '100%'
+        outcome['editor_url'] = self._absolute(unit.edit_url)
+        outcome['current_url'] = self._absolute(chapter.units_url)
+        return outcome
+
+    def _course_detail_form_fields(self, soup: BeautifulSoup, csrf: str, course: Course) -> list[tuple[str, Any]]:
+        goal_count = max(len(soup.select("input[name='learning_goals']")), 4)
+        fields: list[tuple[str, Any]] = [
+            ('csrfmiddlewaretoken', (None, csrf)),
+            ('description', (None, self._course_description_html(course))),
+            ('prerequisite_description', (None, self._course_prerequisites_html(course))),
+            ('content_price', (None, '99000')),
+        ]
+
+        for option in soup.select("#id_prerequisites option[selected]"):
+            value = str(option.get('value') or '').strip()
+            if value:
+                fields.append(('prerequisites', (None, value)))
+
+        for goal in self._course_learning_goals(course, goal_count):
+            fields.append(('learning_goals', (None, goal)))
+        return fields
+
+    def _course_ai_content(self, course: Course) -> dict[str, Any]:
+        metadata: Any = course.extra_metadata or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError:
+                metadata = {}
+        if not isinstance(metadata, dict):
+            return {}
+        content = metadata.get('ai_course_content')
+        return content if isinstance(content, dict) else {}
+
+    def _course_description_html(self, course: Course) -> str:
+        content = self._course_ai_content(course)
+        description = (
+            self._clean_text(content.get('course_overview'))
+            or self._clean_text(getattr(course, 'description_fa', None))
+            or self._clean_text(getattr(course, 'description_en', None))
+            or 'توضیحات دوره به زودی تکمیل می‌شود.'
+        )
+        return self._paragraphs_to_html(description)
+
+    def _course_prerequisites_html(self, course: Course) -> str:
+        content = self._course_ai_content(course)
+        prerequisites = self._clean_text_list(content.get('prerequisites'))
+        prerequisite_description = self._clean_text(content.get('prerequisites_description'))
+        if not prerequisite_description and prerequisites:
+            prerequisite_description = 'برای استفاده بهتر از این دوره، آشنایی اولیه با موارد زیر پیشنهاد می‌شود.'
+        if not prerequisite_description:
+            prerequisite_description = 'آشنایی مقدماتی با ChatGPT و مفاهیم پایه هوش مصنوعی برای شروع این دوره کافی است.'
+
+        lines = [prerequisite_description]
+        if prerequisites:
+            lines.append('پیش‌نیازهای پیشنهادی:')
+            lines.extend(f'- {item}' for item in prerequisites)
+        return self._paragraphs_to_html('\n'.join(lines))
+
+    def _course_learning_goals(self, course: Course, count: int) -> list[str]:
+        content = self._course_ai_content(course)
+        candidates = self._clean_text_list(content.get('what_you_will_learn'))
+        candidates.extend(self._clean_text_list(content.get('course_goals')))
+        candidates.extend(self._course_description_learning_goals(course))
+        fallback = [
+            'کاربردهای عملی ChatGPT در حل مسئله',
+            'طراحی پرامپت‌های دقیق و قابل استفاده',
+            'تحقیق و برنامه‌ریزی با ابزارهای هوش مصنوعی',
+            'تمرین عملی برای تبدیل مفاهیم به مهارت',
+        ]
+
+        goals: list[str] = []
+        seen: set[str] = set()
+        for item in candidates + fallback:
+            item = item[:255].strip()
+            normalized = self._normalize_title_text(item)
+            if normalized and normalized not in seen:
+                goals.append(item)
+                seen.add(normalized)
+            if len(goals) >= count:
+                break
+        return goals
+
+    def _course_description_learning_goals(self, course: Course) -> list[str]:
+        text = ' '.join(
+            item
+            for item in (
+                self._clean_text(getattr(course, 'title_fa', None)),
+                self._clean_text(getattr(course, 'title_en', None)),
+                self._clean_text(getattr(course, 'description_fa', None)),
+                self._clean_text(getattr(course, 'description_en', None)),
+            )
+            if item
+        )
+        normalized = self._normalize_title_text(text)
+        goals: list[str] = []
+
+        keyword_goals = [
+            (('chatgpt', 'چتgpt', 'چت جی پی تی', 'چت‌جی‌پی‌تی'), 'کاربردهای عملی ChatGPT در انجام کارهای تخصصی'),
+            (('پرامپت', 'prompt'), 'طراحی پرامپت‌های دقیق برای پاسخ‌های قابل استفاده'),
+            (('ایجنت', 'agent'), 'کار با ایجنت‌های هوش مصنوعی برای اجرای تسک‌ها'),
+            (('تحقیق', 'جستجو', 'جست‌وجو', 'research', 'search'), 'تحقیق و جست‌وجوی عمیق با ابزارهای هوش مصنوعی'),
+            (('برنامه ریزی', 'برنامه‌ریزی', 'planning'), 'برنامه‌ریزی ساختاریافته با کمک هوش مصنوعی'),
+            (('اتوماسیون', 'automation'), 'اتوماسیون فرایندهای تکراری با ابزارهای هوش مصنوعی'),
+            (('مرورگر', 'browser'), 'به‌کارگیری ایجنت‌های مبتنی بر مرورگر'),
+            (('پروژه', 'project'), 'ساخت پروژه‌های سفارشی با رویکرد عملی'),
+            (('زمینه', 'context'), 'استفاده از زمینه برای بهبود کیفیت پاسخ‌ها'),
+        ]
+        for keywords, goal in keyword_goals:
+            if any(self._normalize_title_text(keyword) in normalized for keyword in keywords):
+                goals.append(goal)
+
+        if text and len(goals) < 4:
+            goals.extend(
+                [
+                    'درک مفاهیم اصلی مطرح‌شده در دوره',
+                    'به‌کارگیری آموخته‌ها در سناریوهای واقعی',
+                    'تحلیل نمونه‌های عملی مرتبط با موضوع دوره',
+                    'تبدیل توضیحات دوره به مهارت‌های قابل اجرا',
+                ]
+            )
+        return goals
+
+    def _clean_text(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = re.sub(r'\s+', ' ', value).strip()
+        return text or None
+
+    def _clean_text_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        items: list[str] = []
+        for item in value:
+            text = self._clean_text(item)
+            if text:
+                items.append(text)
+        return items
+
+    def _paragraphs_to_html(self, value: str) -> str:
+        if '<p' in value.lower() or '<br' in value.lower():
+            return value
+        lines = [line.strip() for line in value.splitlines() if line.strip()]
+        if not lines:
+            lines = [value.strip()]
+        return '\n'.join(f'<p>{html.escape(line)}</p>' for line in lines if line)
+
+    def _course_thumbnail_file_path(self, course: Course) -> str | None:
+        candidates = [
+            (getattr(course, 'thumbnail_local', '') or '').strip(),
+            (getattr(course, 'cover_local_path', '') or '').strip(),
+        ]
+        for raw in candidates:
+            if not raw:
+                continue
+            candidate = Path(raw)
+            if candidate.is_file():
+                return str(candidate.resolve())
+        return None
+
+    def _upload_first_episode_as_teaser(
+        self,
+        course_id: str,
+        episodes: list[Episode],
+    ) -> dict[str, Any]:
+        ordered = sorted(episodes, key=lambda item: (item.episode_number or 0, item.sort_order or 0))
+        first_episode = next((episode for episode in ordered if self._episode_video_file_path(episode)), None)
+        if first_episode is None:
+            return {'result': 'skipped_missing_video', 'episode_number': None, 'video_file': None}
+
+        video_path = self._episode_video_file_path(first_episode)
+        if not video_path:
+            return {
+                'result': 'skipped_missing_video',
+                'episode_number': first_episode.episode_number,
+                'video_file': None,
+            }
+
+        detail_path = f'/marketplace/teacher/course/{course_id}/detail/edit'
+        detail_url = self._absolute(detail_path)
+        soup = self._get_soup(detail_path)
+        csrf = self._csrf_from_soup(soup)
+        upload_type = self._script_value(soup, 'type') or 'course'
+        obj_id = self._script_value(soup, 'objId') or course_id
+        source = self._script_value(soup, 'user_type') or 'teacher'
+        is_teaser = self._script_bool_value(soup, 'is_teaser', default=True)
+        self._upload_direct_video(
+            referer_url=detail_url,
+            video_path=video_path,
+            upload_type=upload_type,
+            obj_id=obj_id,
+            csrf=csrf,
+            source=source,
+            is_teaser=is_teaser,
+        )
+        return {
+            'result': 'uploaded',
+            'episode_number': first_episode.episode_number,
+            'video_file': video_path,
+            'type': upload_type,
+            'id': obj_id,
+            'is_teaser': is_teaser,
+        }
+
+    def _load_cookies(self, raw: str) -> None:
+        try:
+            cookies = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise UploadConfigurationError('Cookies JSON is invalid.') from exc
+        if not isinstance(cookies, list):
+            raise UploadConfigurationError('Cookies JSON must be a list.')
+
+        for cookie in cookies:
+            if not isinstance(cookie, dict):
+                continue
+            name = str(cookie.get('name') or '').strip()
+            value = cookie.get('value')
+            if not name or value is None:
+                continue
+            if name == 'token':
+                self.token = str(value)
+            cookie_kwargs: dict[str, str] = {'path': str(cookie.get('path') or '/')}
+            domain = str(cookie.get('domain') or '').strip().lstrip('.')
+            if domain:
+                cookie_kwargs['domain'] = domain
+            self.session.cookies.set(name, str(value), **cookie_kwargs)
+
+        if not self.token:
+            raise UploadConfigurationError('upload_cookies_json does not include token cookie.')
+
+    def _headers(self, *, accept: str = 'text/html', referer: str | None = None) -> dict[str, str]:
+        headers = {
+            'Authorization': f'Bearer {self.token}',
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': accept,
+        }
+        if referer:
+            headers['Referer'] = referer
+            headers['Origin'] = self.base_url
+        return headers
+
+    def _get_soup(self, url_or_path: str) -> BeautifulSoup:
+        url = self._absolute(url_or_path)
+        response = self.session.get(
+            url,
+            headers=self._headers(accept='text/html'),
+            timeout=self.REQUEST_TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+        self._raise_for_response(response, url)
+        return BeautifulSoup(response.content, 'html.parser', from_encoding='utf-8')
+
+    def _post_form(
+        self,
+        url_or_path: str,
+        data: dict[str, Any],
+        files: Any = None,
+    ) -> requests.Response:
+        url = self._absolute(url_or_path)
+        response = self.session.post(
+            url,
+            headers=self._headers(accept='text/html,application/json', referer=url),
+            data=data,
+            files=files,
+            timeout=self.REQUEST_TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+        self._raise_for_response(response, url, allow_redirect=True)
+        return response
+
+    def _post_multipart_fields(self, url_or_path: str, fields: dict[str, Any]) -> requests.Response:
+        multipart_fields = {key: (None, str(value)) for key, value in fields.items()}
+        return self._post_form(url_or_path, {}, files=multipart_fields)
+
+    def _raise_for_response(self, response: requests.Response, url: str, *, allow_redirect: bool = False) -> None:
+        if allow_redirect and response.status_code in {301, 302, 303, 307, 308}:
+            return
+        if response.status_code in {301, 302, 303, 307, 308}:
+            location = response.headers.get('Location', '')
+            if any(token in location.lower() for token in ('login', 'signin', 'auth')):
+                raise UploadAuthExpiredError(f'Maktab auth failed. Update cookies/token. url={location}')
+        if response.status_code in {401, 403}:
+            raise UploadAuthExpiredError(f'Maktab auth failed. Update cookies/token. url={url}')
+        if response.status_code >= 400:
+            raise UploadConfigurationError(
+                f'Maktab marketplace request failed: {response.status_code} {response.text[:300]}'
+            )
+
+    def _list_chapters(self, course_id: str) -> list[MarketplaceChapter]:
+        soup = self._get_soup(f'/marketplace/teacher/course/{course_id}/chapters/')
+        chapters: list[MarketplaceChapter] = []
+        for units_link in soup.select("a[href*='/chapters/'][href*='/units/']"):
+            units_url = units_link.get('href') or ''
+            match = re.search(r'/chapters/(\d+)/units/', units_url)
+            if not match:
+                continue
+            chapter_id = match.group(1)
+            row = units_link.find_parent('li', class_='item') or units_link.find_parent('div', class_='col-12')
+            title = ''
+            edit_url = None
+            if row:
+                title_cell = row.select_one('.col-4')
+                if title_cell:
+                    title = title_cell.get_text(' ', strip=True)
+                edit = row.select_one("a[href*='/chapters/edit/?chapter_id=']")
+                if edit:
+                    edit_url = edit.get('href')
+            chapters.append(MarketplaceChapter(id=chapter_id, title=title, units_url=units_url, edit_url=edit_url))
+        return chapters
+
+    def _create_chapter(self, course_id: str, title: str) -> MarketplaceChapter:
+        edit_path = f'/marketplace/teacher/course/{course_id}/chapters/edit/'
+        soup = self._get_soup(edit_path)
+        csrf = self._csrf_from_soup(soup)
+        response = self._post_multipart_fields(edit_path, {'csrfmiddlewaretoken': csrf, 'title': title})
+        location = response.headers.get('Location') or ''
+        match = re.search(r'/chapters/(\d+)/units/', location)
+        if match:
+            return MarketplaceChapter(
+                id=match.group(1),
+                title=title,
+                units_url=location,
+                edit_url=f'/marketplace/teacher/course/{course_id}/chapters/edit/?chapter_id={match.group(1)}',
+            )
+        return self.ensure_video_chapter(course_id)
+
+    def _rename_chapter(self, course_id: str, chapter: MarketplaceChapter, title: str) -> MarketplaceChapter:
+        edit_url = chapter.edit_url or f'/marketplace/teacher/course/{course_id}/chapters/edit/?chapter_id={chapter.id}'
+        soup = self._get_soup(edit_url)
+        csrf = self._csrf_from_soup(soup)
+        self._post_multipart_fields(edit_url, {'csrfmiddlewaretoken': csrf, 'title': title})
+        return MarketplaceChapter(id=chapter.id, title=title, units_url=chapter.units_url, edit_url=edit_url)
+
+    def _find_unit(self, chapter: MarketplaceChapter, episode: Episode) -> MarketplaceUnit | None:
+        soup = self._get_soup(chapter.units_url)
+        candidates = [self._normalize_title_text(item) for item in self._episode_title_candidates(episode)]
+        candidates = [item for item in candidates if item]
+        for edit_link in soup.select("a[href*='/units/edit/?unit_id=']"):
+            href = edit_link.get('href') or ''
+            match = re.search(r'unit_id=(\d+)', href)
+            if not match:
+                continue
+            row = edit_link.find_parent('li', class_='item') or edit_link.find_parent('div', class_='col-12')
+            raw_title = ''
+            if row:
+                title_cell = row.select_one('.col-4')
+                if title_cell:
+                    raw_title = title_cell.get_text(' ', strip=True)
+            row_title = self._normalize_title_text(raw_title)
+            if row_title and any(self._titles_match(row_title, candidate) for candidate in candidates):
+                return MarketplaceUnit(id=match.group(1), title=raw_title, edit_url=href)
+        return None
+
+    def _list_units(self, chapter: MarketplaceChapter) -> list[MarketplaceUnit]:
+        soup = self._get_soup(chapter.units_url)
+        units: list[MarketplaceUnit] = []
+        for edit_link in soup.select("a[href*='/units/edit/?unit_id=']"):
+            href = edit_link.get('href') or ''
+            match = re.search(r'unit_id=(\d+)', href)
+            if not match:
+                continue
+            row = edit_link.find_parent('li', class_='item') or edit_link.find_parent('div', class_='col-12')
+            raw_title = ''
+            if row:
+                title_cell = row.select_one('.col-4')
+                if title_cell:
+                    raw_title = title_cell.get_text(' ', strip=True)
+            units.append(MarketplaceUnit(id=match.group(1), title=raw_title, edit_url=href))
+        return units
+
+    def _create_lecture_unit(self, course_id: str, chapter: MarketplaceChapter, episode: Episode) -> MarketplaceUnit:
+        edit_path = f'/marketplace/teacher/course/{course_id}/chapters/{chapter.id}/units/edit/?unit_type=lecture'
+        soup = self._get_soup(edit_path)
+        csrf = self._csrf_from_soup(soup)
+        title = self._episode_form_title(episode)
+        data = {'csrfmiddlewaretoken': (None, csrf), 'title': (None, title), 'description': (None, '')}
+        subtitle_path = self._episode_subtitle_vtt_path(episode)
+        files: dict[str, Any] = dict(data)
+        file_handle = None
+        try:
+            if subtitle_path:
+                file_handle = open(subtitle_path, 'rb')
+                files['caption_file'] = (Path(subtitle_path).name, file_handle, 'text/vtt')
+            response = self._post_form(edit_path, {}, files=files)
+        finally:
+            if file_handle:
+                file_handle.close()
+        location = response.headers.get('Location') or ''
+        match = re.search(r'unit_id=(\d+)', location)
+        if not match:
+            raise UploadConfigurationError(f'Lecture unit was not created. redirect={location}')
+        return MarketplaceUnit(id=match.group(1), title=title, edit_url=location)
+
+    def _sync_unit_order(self, chapter: MarketplaceChapter, episodes: list[Episode]) -> None:
+        units = self._list_units(chapter)
+        if len(units) < 2:
+            return
+
+        episode_order: dict[str, int] = {}
+        for index, episode in enumerate(sorted(episodes, key=lambda item: (item.episode_number or 0, item.sort_order or 0))):
+            for title in self._episode_title_candidates(episode):
+                normalized = self._normalize_title_text(title)
+                if normalized:
+                    episode_order[normalized] = index
+
+        def unit_sort_key(unit: MarketplaceUnit) -> tuple[int, str]:
+            unit_title = self._normalize_title_text(unit.title)
+            for candidate, index in episode_order.items():
+                if self._titles_match(unit_title, candidate):
+                    return (index, unit.id)
+            return (len(episode_order) + 1, unit.id)
+
+        ordered_units = sorted(units, key=unit_sort_key)
+        if [unit.id for unit in ordered_units] == [unit.id for unit in units]:
+            return
+
+        soup = self._get_soup(chapter.units_url)
+        form = soup.find('form', {'id': 'units_orders'})
+        if not form:
+            return
+        csrf = self._csrf_from_soup(BeautifulSoup(str(form), 'html.parser'))
+        action = form.get('action') or f'{chapter.units_url.rstrip("/")}/submit_order/'
+        data: list[tuple[str, str]] = [('csrfmiddlewaretoken', csrf)]
+        data.extend(('pk_list', unit.id) for unit in ordered_units)
+        response = self.session.post(
+            self._absolute(action),
+            headers=self._headers(accept='text/html', referer=self._absolute(chapter.units_url)) | {'X-CSRFToken': csrf},
+            data=data,
+            timeout=self.REQUEST_TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+        self._raise_for_response(response, self._absolute(action), allow_redirect=True)
+
+    def _upload_video_to_unit(self, unit: MarketplaceUnit, video_path: str) -> None:
+        edit_url = self._absolute(unit.edit_url)
+        if 'upload-only=true' not in edit_url:
+            separator = '&' if '?' in edit_url else '?'
+            edit_url = f'{edit_url}{separator}upload-only=true'
+        soup = self._get_soup(edit_url)
+        csrf = self._csrf_from_soup(soup)
+        obj_id = self._script_value(soup, 'objId') or unit.id
+        self._upload_direct_video(
+            referer_url=edit_url,
+            video_path=video_path,
+            upload_type='lecture',
+            obj_id=obj_id,
+            csrf=csrf,
+            source='teacher',
+            is_teaser=False,
+        )
+
+    def _upload_direct_video(
+        self,
+        *,
+        referer_url: str,
+        video_path: str,
+        upload_type: str,
+        obj_id: str,
+        csrf: str,
+        source: str,
+        is_teaser: bool,
+    ) -> None:
+        file_type = mimetypes.guess_type(video_path)[0] or 'video/mp4'
+        start = self.session.post(
+            f'{self.base_url}/api/v1/general/upload/direct/start/',
+            headers=self._headers(accept='application/json', referer=referer_url) | {'X-CSRFToken': csrf},
+            data={
+                'csrfmiddlewaretoken': csrf,
+                'file_name': Path(video_path).name,
+                'file_type': file_type,
+                'type': upload_type,
+                'id': obj_id,
+                'source': source,
+                'is_teaser': 'true' if is_teaser else 'false',
+            },
+            timeout=self.REQUEST_TIMEOUT_SECONDS,
+        )
+        self._raise_for_response(start, f'{self.base_url}/api/v1/general/upload/direct/start/')
+        start_payload = start.json()
+        upload_url = start_payload['url']
+        fields = start_payload['fields']
+        file_id = start_payload['id']
+
+        with open(video_path, 'rb') as handle:
+            upload = requests.post(
+                upload_url,
+                data=fields,
+                files={'file': (Path(video_path).name, handle, file_type)},
+                timeout=max(self.REQUEST_TIMEOUT_SECONDS, 900),
+            )
+        if upload.status_code >= 400:
+            raise UploadConfigurationError(f'S3 video upload failed: {upload.status_code} {upload.text[:300]}')
+
+        finish = self.session.post(
+            f'{self.base_url}/api/v1/general/upload/direct/finish/',
+            headers=self._headers(accept='application/json', referer=referer_url) | {'X-CSRFToken': csrf},
+            data={'csrfmiddlewaretoken': csrf, 'file_id': file_id, 'type': upload_type, 'id': obj_id},
+            timeout=self.REQUEST_TIMEOUT_SECONDS,
+        )
+        self._raise_for_response(finish, f'{self.base_url}/api/v1/general/upload/direct/finish/')
+
+    def _csrf_from_soup(self, soup: BeautifulSoup) -> str:
+        field = soup.find('input', {'name': 'csrfmiddlewaretoken'})
+        if not field or not field.get('value'):
+            raise UploadConfigurationError('CSRF token was not found on marketplace form.')
+        return str(field.get('value'))
+
+    def _script_value(self, soup: BeautifulSoup, name: str) -> str | None:
+        scripts = '\n'.join(script.get_text('\n') for script in soup.find_all('script') if not script.get('src'))
+        match = re.search(rf'var\s+{re.escape(name)}\s*=\s*[\'"]([^\'"]*)[\'"]', scripts)
+        return match.group(1) if match else None
+
+    def _script_bool_value(self, soup: BeautifulSoup, name: str, *, default: bool = False) -> bool:
+        scripts = '\n'.join(script.get_text('\n') for script in soup.find_all('script') if not script.get('src'))
+        match = re.search(rf'var\s+{re.escape(name)}\s*=\s*(true|false)', scripts, flags=re.IGNORECASE)
+        if not match:
+            return default
+        return match.group(1).lower() == 'true'
+
+    def _absolute(self, url_or_path: str) -> str:
+        return urljoin(self.base_url, url_or_path)
+
+    def _episode_form_title(self, episode: Episode) -> str:
+        title_fa = (episode.title_fa or '').strip()
+        if title_fa:
+            return title_fa
+        title_en = (episode.title_en or '').strip()
+        if title_en:
+            return title_en
+        if episode.episode_number is not None:
+            return f'Episode {episode.episode_number}'
+        return 'Episode'
+
+    def _episode_video_file_path(self, episode: Episode) -> str | None:
+        local_video = (episode.video_local_path or '').strip()
+        if not local_video:
+            return None
+        candidate = Path(local_video)
+        if not candidate.is_file():
+            return None
+        return str(candidate.resolve())
+
+    def _episode_subtitle_vtt_path(self, episode: Episode) -> str | None:
+        candidates = [(episode.subtitle_processed_path or '').strip(), (episode.subtitle_local_path or '').strip()]
+        for raw in candidates:
+            if not raw:
+                continue
+            candidate = Path(raw)
+            if candidate.is_file() and candidate.suffix.lower() == '.vtt':
+                return str(candidate.resolve())
+        return None
+
+    def _episode_title_candidates(self, episode: Episode) -> list[str]:
+        candidates: list[str] = []
+        title_fa = (episode.title_fa or '').strip()
+        title_en = (episode.title_en or '').strip()
+        if title_fa:
+            candidates.append(title_fa)
+        if title_en:
+            candidates.append(title_en)
+        if title_fa and title_en:
+            candidates.append(f'{title_fa} ({title_en})')
+            candidates.append(f'{title_fa}({title_en})')
+        return candidates
+
+    def _normalize_title_text(self, value: str) -> str:
+        normalized = (value or '').strip().lower()
+        normalized = normalized.replace('ي', 'ی').replace('ك', 'ک')
+        normalized = re.sub(r'[\u200c\u200f\u202a-\u202e]', ' ', normalized)
+        normalized = re.sub(r'\s+', ' ', normalized)
+        normalized = re.sub(r'[^\w\s\u0600-\u06FF\-\(\)]', '', normalized)
+        return normalized.strip()
+
+    def _titles_match(self, row_title: str, candidate: str) -> bool:
+        if row_title == candidate:
+            return True
+        if len(candidate) >= 6 and candidate in row_title:
+            return True
+        if len(row_title) >= 6 and row_title in candidate:
+            return True
+        if min(len(row_title), len(candidate)) >= 6:
+            return SequenceMatcher(None, row_title, candidate).ratio() >= 0.87
+        return False
 
 
 def _parse_bool(raw: str | None, default: bool = False) -> bool:
@@ -102,13 +1129,7 @@ class FirefoxUploadNavigator:
         self.config = self._load_config()
 
     def validate_cookies(self) -> dict[str, Any]:
-        driver = self._create_driver()
-        try:
-            self._open_target_with_cookies(driver)
-            self._assert_logged_in(driver)
-            return {'valid': True, 'message': 'Cookies are valid and logged-in session is available.'}
-        finally:
-            driver.quit()
+        return MirzaApiClient(self.config).validate_session()
 
     def open_course_episode_page(
         self,
@@ -121,11 +1142,14 @@ class FirefoxUploadNavigator:
         if not query:
             raise UploadConfigurationError('Course title is empty and cannot be used for search.')
 
+        course_key = str(course.id)
+        direct_units_url = (preferred_units_url or '').strip() or self.COURSE_UNITS_URL_CACHE.get(course_key)
+        api_route = None if direct_units_url else self._resolve_course_route_with_api(course)
+        landing_url = direct_units_url or (api_route.url if api_route else None)
+
         driver = self._create_driver()
         try:
-            course_key = str(course.id)
-            direct_units_url = (preferred_units_url or '').strip() or self.COURSE_UNITS_URL_CACHE.get(course_key)
-            self._open_target_with_cookies(driver, landing_url=direct_units_url or None)
+            self._open_target_with_cookies(driver, landing_url=landing_url)
             self._assert_logged_in(driver)
             self._wait_for_page_ready(driver)
             self._pause_between_steps()
@@ -148,6 +1172,34 @@ class FirefoxUploadNavigator:
                     'editor_url': unit_route.get('editor_url', driver.current_url),
                     'units_list_url': units_list_url,
                     'used_cached_units_url': True,
+                    'skip_existing': unit_action == 'skip_existing',
+                    'debug_halt': debug_halt,
+                    'should_continue': not debug_halt,
+                    'form_filled': bool(unit_route.get('form_filled')),
+                    'form_title': unit_route.get('form_title'),
+                    'subtitle_attached': bool(unit_route.get('subtitle_attached')),
+                    'subtitle_path': unit_route.get('subtitle_path'),
+                    'subtitle_missing_reason': unit_route.get('subtitle_missing_reason'),
+                }
+            if api_route is not None:
+                units_list_url = self._open_units_from_api_route(driver, course, api_route)
+                if units_list_url:
+                    self.COURSE_UNITS_URL_CACHE[course_key] = units_list_url
+                unit_route = self._open_or_create_episode_unit(driver, episode)
+                unit_action = unit_route.get('unit_action')
+                debug_halt = bool(keep_browser_open and unit_action == 'skip_existing')
+                return {
+                    'ok': True,
+                    'query': query,
+                    'current_url': driver.current_url,
+                    'headless': self.config.headless,
+                    'browser_kept_open': keep_browser_open,
+                    'unit_action': unit_action,
+                    'matched_unit_title': unit_route.get('matched_title'),
+                    'editor_url': unit_route.get('editor_url', driver.current_url),
+                    'units_list_url': units_list_url,
+                    'used_cached_units_url': False,
+                    'api_route_source': api_route.source,
                     'skip_existing': unit_action == 'skip_existing',
                     'debug_halt': debug_halt,
                     'should_continue': not debug_halt,
@@ -253,11 +1305,17 @@ class FirefoxUploadNavigator:
         if not query:
             raise UploadConfigurationError('Course title is empty and cannot be used for search.')
 
+        route = self._resolve_course_route_with_api(course)
+        return MaktabMarketplaceClient(self.config).upload_course_episodes(course, episodes, route)
+
+        course_key = str(course.id)
+        direct_units_url = (preferred_units_url or '').strip() or self.COURSE_UNITS_URL_CACHE.get(course_key)
+        api_route = None if direct_units_url else self._resolve_course_route_with_api(course)
+        landing_url = direct_units_url or (api_route.url if api_route else None)
+
         driver = self._create_driver()
         try:
-            course_key = str(course.id)
-            direct_units_url = (preferred_units_url or '').strip() or self.COURSE_UNITS_URL_CACHE.get(course_key)
-            self._open_target_with_cookies(driver, landing_url=direct_units_url or None)
+            self._open_target_with_cookies(driver, landing_url=landing_url)
             self._assert_logged_in(driver)
             self._wait_for_page_ready(driver)
             self._pause_between_steps()
@@ -267,6 +1325,8 @@ class FirefoxUploadNavigator:
             if direct_units_url and '/units/' in driver.current_url:
                 used_cached_units_url = True
                 units_list_url = self._derive_units_list_url(driver.current_url)
+            elif api_route is not None:
+                units_list_url = self._open_units_from_api_route(driver, course, api_route)
             else:
                 if direct_units_url and '/units/' not in driver.current_url:
                     driver.get(self.config.target_url)
@@ -360,6 +1420,7 @@ class FirefoxUploadNavigator:
                 'processed_count': len(results),
                 'units_list_url': units_list_url,
                 'used_cached_units_url': used_cached_units_url,
+                'api_route_source': api_route.source if api_route else None,
             }
         finally:
             if keep_browser_open:
@@ -369,6 +1430,51 @@ class FirefoxUploadNavigator:
 
     def _pause_between_steps(self, seconds: float | None = None) -> None:
         time.sleep(seconds if seconds is not None else self.STEP_PAUSE_SECONDS)
+
+    def _resolve_course_route_with_api(self, course: Course) -> MirzaCourseRoute | None:
+        client = MirzaApiClient(self.config)
+        route = client.resolve_course_route(course, self._titles_match)
+        return route
+
+    def _open_units_from_api_route(
+        self,
+        driver: webdriver.Firefox,
+        course: Course,
+        route: MirzaCourseRoute,
+    ) -> str | None:
+        if route.created:
+            self._fill_course_details_form(driver, course)
+
+        if self._is_login_url(driver.current_url):
+            raise UploadAuthExpiredError(self._auth_expired_message(driver.current_url))
+
+        if '/units/' not in (driver.current_url or ''):
+            if '/chapters/' not in (driver.current_url or ''):
+                chapters_url = self._course_chapters_url_from_route(route)
+                if chapters_url:
+                    driver.get(chapters_url)
+                    self._wait_for_page_ready(driver)
+                    self._pause_between_steps()
+            if '/chapters/' not in (driver.current_url or ''):
+                self._click_sections_button(driver)
+
+            self._ensure_chapters_have_units(driver, course)
+            self._assert_logged_in(driver)
+            self._click_units_button(driver)
+
+        self._wait_for_units_listing_ready(driver)
+        self._pause_between_steps()
+        return self._derive_units_list_url(driver.current_url)
+
+    def _course_chapters_url_from_route(self, route: MirzaCourseRoute) -> str | None:
+        if '/chapters/' in route.url:
+            return route.url
+        if route.course_id:
+            return urljoin(self.config.target_url, f'/courses/{route.course_id}/chapters/')
+        match = re.search(r'/courses/([^/]+)/', route.url)
+        if match:
+            return urljoin(self.config.target_url, f'/courses/{match.group(1)}/chapters/')
+        return None
 
     def _wait_for_page_ready(self, driver: webdriver.Firefox, timeout: float | None = None) -> None:
         wait_seconds = timeout if timeout is not None else self.PAGE_READY_WAIT_SECONDS
@@ -467,6 +1573,8 @@ class FirefoxUploadNavigator:
                 continue
                 
         if not create_btn:
+            if self._is_login_url(driver.current_url):
+                raise UploadAuthExpiredError(self._auth_expired_message(driver.current_url))
             raise UploadConfigurationError(
                 f"Course not found, and 'Create Draft' (ساخت دوره جدید) button was not found on the page. current_url={driver.current_url}"
             )
@@ -1359,6 +2467,11 @@ class FirefoxUploadNavigator:
         if not target_host:
             raise UploadConfigurationError('upload_target_url is invalid. Host is missing.')
         target_scheme = target_parts.scheme if target_parts.scheme in {'http', 'https'} else 'https'
+        if not self._has_cookie_for_target_host(cookies, target_host):
+            raise UploadConfigurationError(
+                f'No cookie domain matches target host "{target_host}". '
+                'Export cookies while logged in on maktabkhooneh/mirza and save them in upload_cookies_json.'
+            )
 
         applied = 0
         current_seed_url = None
@@ -1394,6 +2507,18 @@ class FirefoxUploadNavigator:
         driver.get(landing_url or self.config.target_url)
         self._wait_for_page_ready(driver)
         self._pause_between_steps()
+
+    def _has_cookie_for_target_host(self, cookies: list[dict[str, Any]], target_host: str) -> bool:
+        target = (target_host or '').strip().lower().lstrip('.')
+        if not target:
+            return False
+        for cookie in cookies:
+            domain = str(cookie.get('domain') or '').strip().lower().lstrip('.')
+            if not domain:
+                continue
+            if target == domain or target.endswith(f'.{domain}') or domain.endswith(f'.{target}'):
+                return True
+        return False
 
     def _assert_logged_in(self, driver: webdriver.Firefox) -> None:
         if self.config.login_check_selector:

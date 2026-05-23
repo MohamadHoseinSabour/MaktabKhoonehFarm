@@ -35,6 +35,13 @@ function toWsUrl(base: string, courseId: string) {
   return `${wsBase}/ws/courses/${courseId}/live-logs/`
 }
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message.trim()
+  }
+  return String(err || 'Unknown error')
+}
+
 type GlobalAction = 'toggle_debug' | 'start_download' | 'start_process' | 'start_translate' | 'start_upload' | 'auto_pipeline' | 'ai_course_content'
 type EpisodeAction = 'download' | 'process' | 'upload' | 'retry' | 'translate'
 const EXPIRED_LINK_PREFIX = 'LINK_EXPIRED:'
@@ -219,7 +226,7 @@ export default function CourseDetailPage() {
         setError(null)
       }
     } catch (err) {
-      if (mounted.current) setError((err as Error).message)
+      if (mounted.current) setError(getErrorMessage(err))
     } finally {
       if (mounted.current) setLoading(false)
     }
@@ -271,8 +278,9 @@ export default function CourseDetailPage() {
       }
     } catch (err) {
       if (mounted.current) {
-        setError((err as Error).message)
-        setStatusNote(`${title} failed`)
+        const message = getErrorMessage(err)
+        setError(message)
+        setStatusNote(`${title} failed: ${message}`)
       }
     } finally {
       if (mounted.current) setRunningGlobalAction(null)
@@ -307,7 +315,7 @@ export default function CourseDetailPage() {
         processed++
       } catch (err) {
         failed++
-        if (mounted.current) setError(`${episode.episode_number}: ${(err as Error).message}`)
+        if (mounted.current) setError(`${episode.episode_number}: ${getErrorMessage(err)}`)
       }
       if (mounted.current) await load()
     }
@@ -406,8 +414,9 @@ export default function CourseDetailPage() {
       }
     } catch (err) {
       if (mounted.current) {
-        setError((err as Error).message)
-        setStatusNote(`${action} failed.`)
+        const message = getErrorMessage(err)
+        setError(message)
+        setStatusNote(`${action} failed: ${message}`)
       }
     } finally {
       if (mounted.current) setRunningEpisodeAction(null)

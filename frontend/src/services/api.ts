@@ -6,6 +6,36 @@ type ApiErrorPayload = {
   error?: unknown
 }
 
+function stringifyErrorCandidate(candidate: unknown): string | null {
+  if (typeof candidate === 'string' && candidate.trim()) {
+    return candidate.trim()
+  }
+
+  if (Array.isArray(candidate)) {
+    const parts = candidate
+      .map((item) => stringifyErrorCandidate(item))
+      .filter((item): item is string => Boolean(item))
+    if (parts.length > 0) {
+      return parts.join(' | ')
+    }
+  }
+
+  if (candidate && typeof candidate === 'object') {
+    const record = candidate as Record<string, unknown>
+    if (typeof record.msg === 'string' && record.msg.trim()) {
+      return record.msg.trim()
+    }
+    if (typeof record.message === 'string' && record.message.trim()) {
+      return record.message.trim()
+    }
+    if (typeof record.detail === 'string' && record.detail.trim()) {
+      return record.detail.trim()
+    }
+  }
+
+  return null
+}
+
 function normalizeErrorMessage(status: number, body: string): string {
   const fallback = `Request failed: ${status}`
   const trimmed = body.trim()
@@ -16,8 +46,9 @@ function normalizeErrorMessage(status: number, body: string): string {
   try {
     const payload = JSON.parse(trimmed) as ApiErrorPayload
     const candidate = payload.detail ?? payload.message ?? payload.error
-    if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate.trim()
+    const parsed = stringifyErrorCandidate(candidate)
+    if (parsed) {
+      return parsed
     }
   } catch {
     // Keep plain-text fallback below.
