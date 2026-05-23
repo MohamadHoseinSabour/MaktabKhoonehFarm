@@ -378,7 +378,11 @@ class MaktabMarketplaceClient:
             self.upload_episode(course_id, chapter, episode)
             for episode in sorted(episodes, key=lambda item: (item.episode_number or 0, item.sort_order or 0))
         ]
-        self._sync_unit_order(chapter, list(course.episodes or []))
+        order_sync_result = {'result': 'synced'}
+        try:
+            self._sync_unit_order(chapter, list(course.episodes or []))
+        except Exception as exc:
+            order_sync_result = {'result': 'warning', 'error': str(exc)}
         return {
             'ok': True,
             'query': (course.title_fa or course.title_en or course.slug or '').strip(),
@@ -394,6 +398,7 @@ class MaktabMarketplaceClient:
             'chapter_id': chapter.id,
             'chapter_title': chapter.title,
             'course_detail_result': detail_result,
+            'order_sync': order_sync_result,
         }
 
     def ensure_course_details(self, course_id: str, course: Course, episodes: list[Episode]) -> dict[str, Any]:
@@ -418,11 +423,19 @@ class MaktabMarketplaceClient:
                     )
                 )
             response = self._post_form(detail_path, {}, files=fields)
+            self._assert_course_detail_saved(response, detail_path)
         finally:
             for handle in file_handles:
                 handle.close()
 
-        teaser_result = self._upload_first_episode_as_teaser(course_id, episodes)
+        teaser_result: dict[str, Any]
+        try:
+            teaser_result = self._upload_first_episode_as_teaser(course_id, episodes)
+        except Exception as exc:
+            teaser_result = {
+                'result': 'warning',
+                'error': str(exc),
+            }
         return {
             'detail_url': self._absolute(detail_path),
             'form_status_code': response.status_code,
@@ -496,20 +509,89 @@ class MaktabMarketplaceClient:
 
     def _course_detail_form_fields(self, soup: BeautifulSoup, csrf: str, course: Course) -> list[tuple[str, Any]]:
         goal_count = max(len(soup.select("input[name='learning_goals']")), 4)
-        fields: list[tuple[str, Any]] = [
-            ('csrfmiddlewaretoken', (None, csrf)),
-            ('description', (None, self._course_description_html(course))),
-            ('prerequisite_description', (None, self._course_prerequisites_html(course))),
-            ('content_price', (None, '99000')),
-        ]
+        fields = self._extract_form_fields(soup)
+        override_names = {
+            'csrfmiddlewaretoken',
+            'description',
+            'prerequisite_description',
+            'content_price',
+            'learning_goals',
+            'english_title',
+        }
+        fields = [field for field in fields if field[0] not in override_names]
+        fields.insert(0, ('csrfmiddlewaretoken', (None, csrf)))
 
-        for option in soup.select("#id_prerequisites option[selected]"):
-            value = str(option.get('value') or '').strip()
-            if value:
-                fields.append(('prerequisites', (None, value)))
+        english_title = (
+            self._clean_text(getattr(course, 'title_en', None))
+            or self._clean_text(getattr(course, 'slug', None))
+            or self._clean_text(getattr(course, 'title_fa', None))
+            or 'Course'
+        )
+        fields.extend(
+            [
+                ('english_title', (None, english_title)),
+                ('description', (None, self._course_description_html(course))),
+                ('prerequisite_description', (None, self._course_prerequisites_html(course))),
+                ('content_price', (None, '99000')),
+            ]
+        )
 
         for goal in self._course_learning_goals(course, goal_count):
             fields.append(('learning_goals', (None, goal)))
+        return fields
+
+    def _extract_form_fields(self, soup: BeautifulSoup) -> list[tuple[str, Any]]:
+        target_form = None
+        for form in soup.find_all('form'):
+            if form.select_one("[name='description'], [name='english_title'], [name='learning_goals']"):
+                target_form = form
+                break
+        if target_form is None:
+            target_form = soup.find('form')
+        if target_form is None:
+            return []
+
+        fields: list[tuple[str, Any]] = []
+
+        for input_node in target_form.select('input[name]'):
+            if input_node.has_attr('disabled'):
+                continue
+            name = str(input_node.get('name') or '').strip()
+            if not name:
+                continue
+            input_type = str(input_node.get('type') or 'text').strip().lower()
+            if input_type in {'file', 'submit', 'button', 'reset', 'image'}:
+                continue
+            if input_type in {'checkbox', 'radio'} and not input_node.has_attr('checked'):
+                continue
+            value = str(input_node.get('value') or '')
+            if input_type in {'checkbox', 'radio'} and not value:
+                value = 'on'
+            fields.append((name, (None, value)))
+
+        for textarea in target_form.select('textarea[name]'):
+            if textarea.has_attr('disabled'):
+                continue
+            name = str(textarea.get('name') or '').strip()
+            if not name:
+                continue
+            fields.append((name, (None, textarea.get_text() or '')))
+
+        for select in target_form.select('select[name]'):
+            if select.has_attr('disabled'):
+                continue
+            name = str(select.get('name') or '').strip()
+            if not name:
+                continue
+            options = select.select('option[selected]')
+            if not options and not select.has_attr('multiple'):
+                first_option = select.find('option')
+                options = [first_option] if first_option is not None else []
+            for option in options:
+                value = str(option.get('value') or '').strip()
+                if value:
+                    fields.append((name, (None, value)))
+
         return fields
 
     def _course_ai_content(self, course: Course) -> dict[str, Any]:
@@ -763,6 +845,25 @@ class MaktabMarketplaceClient:
     def _post_multipart_fields(self, url_or_path: str, fields: dict[str, Any]) -> requests.Response:
         multipart_fields = {key: (None, str(value)) for key, value in fields.items()}
         return self._post_form(url_or_path, {}, files=multipart_fields)
+
+    def _assert_course_detail_saved(self, response: requests.Response, url_or_path: str) -> None:
+        if response.status_code in {301, 302, 303, 307, 308}:
+            return
+        content_type = str(response.headers.get('Content-Type') or '').lower()
+        if 'html' not in content_type and response.content:
+            return
+
+        soup = BeautifulSoup(response.content, 'html.parser', from_encoding='utf-8')
+        errors: list[str] = []
+        for item in soup.select('.errorlist li, .invalid-feedback, .help-block.error, .form-error'):
+            text = item.get_text(' ', strip=True)
+            if text:
+                errors.append(text)
+        if errors:
+            message = '; '.join(dict.fromkeys(errors))
+            raise UploadConfigurationError(
+                f'Course detail form validation failed at {self._absolute(url_or_path)}: {message}'
+            )
 
     def _raise_for_response(self, response: requests.Response, url: str, *, allow_redirect: bool = False) -> None:
         if allow_redirect and response.status_code in {301, 302, 303, 307, 308}:
