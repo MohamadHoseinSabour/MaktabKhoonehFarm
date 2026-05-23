@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     scraper_request_delay_seconds: float = 1.0
 
     openai_api_key: str | None = None
-    openai_model: str = 'gpt-4o-mini'
+    openai_model: str = 'gemini-2.5-flash-lite'
     claude_api_key: str | None = None
     claude_model: str = 'claude-3-5-sonnet-20241022'
     ai_batch_size: int = 20

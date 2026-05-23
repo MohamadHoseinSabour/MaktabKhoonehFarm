@@ -16,6 +16,7 @@ logger = get_logger('ai.translator')
 
 MIN_OVERVIEW_WORDS = 220
 MIN_OVERVIEW_CHARS = 1300
+GAPGPT_BASE_URL = 'https://api.gapgpt.app/v1'
 
 
 class AITranslator:
@@ -151,6 +152,12 @@ class AITranslator:
                 provider_name = cfg.provider.lower()
                 if provider_name == 'openai':
                     return OpenAIProvider(api_key=api_key, model=cfg.model_name, endpoint_url=cfg.endpoint_url)
+                if provider_name == 'gapgpt':
+                    return OpenAIProvider(
+                        api_key=api_key,
+                        model=cfg.model_name,
+                        endpoint_url=cfg.endpoint_url or GAPGPT_BASE_URL,
+                    )
                 if provider_name == 'claude':
                     return ClaudeProvider(api_key=api_key, model=cfg.model_name, endpoint_url=cfg.endpoint_url)
             except Exception as exc:

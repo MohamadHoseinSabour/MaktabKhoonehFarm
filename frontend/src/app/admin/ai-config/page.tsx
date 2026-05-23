@@ -21,10 +21,12 @@ const ModelIcon = () => (
 
 export default function AIConfigPage() {
   const [configs, setConfigs] = useState<Config[]>([])
-  const [provider, setProvider] = useState('openai')
+  const [provider, setProvider] = useState('gapgpt')
   const [apiKey, setApiKey] = useState('')
-  const [modelName, setModelName] = useState('gpt-4o-mini')
+  const [modelName, setModelName] = useState('gemini-2.5-flash-lite')
   const [error, setError] = useState<string | null>(null)
+  const [info, setInfo] = useState<string | null>(null)
+  const [busyConfigId, setBusyConfigId] = useState<string | null>(null)
   const mounted = useRef(true)
 
   const load = async () => {
@@ -49,6 +51,7 @@ export default function AIConfigPage() {
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setError(null)
+    setInfo(null)
     try {
       const response = await fetch(`${API_BASE}/api/ai-configs/`, {
         method: 'POST',
@@ -73,6 +76,98 @@ export default function AIConfigPage() {
     }
   }
 
+  const activateConfig = async (configId: string) => {
+    setError(null)
+    setInfo(null)
+    setBusyConfigId(configId)
+    try {
+      const response = await fetch(`${API_BASE}/api/ai-configs/${configId}/activate/`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        throw new Error(await response.text())
+      }
+      if (mounted.current) {
+        setInfo('پیکربندی فعال با موفقیت تغییر کرد.')
+        await load()
+      }
+    } catch (err) {
+      if (mounted.current) setError((err as Error).message)
+    } finally {
+      if (mounted.current) setBusyConfigId(null)
+    }
+  }
+
+  const testConfig = async (configId: string) => {
+    setError(null)
+    setInfo(null)
+    setBusyConfigId(configId)
+    try {
+      const response = await fetch(`${API_BASE}/api/ai-configs/${configId}/test/`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        throw new Error(await response.text())
+      }
+      const data = (await response.json()) as { success: boolean; message: string }
+      if (mounted.current) {
+        if (data.success) {
+          setInfo(`تست موفق: ${data.message}`)
+        } else {
+          setError(`تست ناموفق: ${data.message}`)
+        }
+      }
+    } catch (err) {
+      if (mounted.current) setError((err as Error).message)
+    } finally {
+      if (mounted.current) setBusyConfigId(null)
+    }
+  }
+
+  const deactivateConfig = async (configId: string) => {
+    setError(null)
+    setInfo(null)
+    setBusyConfigId(configId)
+    try {
+      const response = await fetch(`${API_BASE}/api/ai-configs/${configId}/deactivate/`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        throw new Error(await response.text())
+      }
+      if (mounted.current) {
+        setInfo('پیکربندی غیرفعال شد.')
+        await load()
+      }
+    } catch (err) {
+      if (mounted.current) setError((err as Error).message)
+    } finally {
+      if (mounted.current) setBusyConfigId(null)
+    }
+  }
+
+  const deleteConfig = async (configId: string) => {
+    setError(null)
+    setInfo(null)
+    setBusyConfigId(configId)
+    try {
+      const response = await fetch(`${API_BASE}/api/ai-configs/${configId}/`, {
+        method: 'DELETE',
+      })
+      if (!response.ok) {
+        throw new Error(await response.text())
+      }
+      if (mounted.current) {
+        setInfo('پیکربندی حذف شد.')
+        await load()
+      }
+    } catch (err) {
+      if (mounted.current) setError((err as Error).message)
+    } finally {
+      if (mounted.current) setBusyConfigId(null)
+    }
+  }
+
   return (
     <div className="admin-layout">
       <AdminSidebar />
@@ -93,6 +188,7 @@ export default function AIConfigPage() {
             <div className="stack" style={{ gap: '0.5rem' }}>
               <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>ارائه‌دهنده سرویس (Provider)</label>
               <select value={provider} onChange={(event) => setProvider(event.target.value)} dir="ltr">
+                <option value="gapgpt">GapGPT (OpenAI-compatible)</option>
                 <option value="openai">OpenAI Edge</option>
                 <option value="claude">Anthropic Claude</option>
               </select>
@@ -100,7 +196,7 @@ export default function AIConfigPage() {
 
             <div className="stack" style={{ gap: '0.5rem' }}>
               <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>مدل هدف (Model)</label>
-              <input value={modelName} onChange={(event) => setModelName(event.target.value)} placeholder="مثال: gpt-4o-mini" dir="ltr" required />
+              <input value={modelName} onChange={(event) => setModelName(event.target.value)} placeholder="مثال: gemini-2.5-flash-lite" dir="ltr" required />
             </div>
 
             <div className="stack" style={{ gap: '0.5rem' }}>
@@ -124,6 +220,40 @@ export default function AIConfigPage() {
               </div>
               <h3 style={{ fontSize: '1.1rem', color: 'var(--text)', marginBottom: '0.2rem' }}>{cfg.provider.toUpperCase()}</h3>
               <p style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: 'var(--accent)', textAlign: 'right' }} dir="ltr">{cfg.model_name}</p>
+              <div className="row" style={{ gap: '0.5rem', marginTop: '0.8rem' }}>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => activateConfig(cfg.id)}
+                  disabled={busyConfigId === cfg.id || cfg.is_active}
+                >
+                  {cfg.is_active ? 'فعال' : 'انتخاب به‌عنوان فعال'}
+                </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={() => testConfig(cfg.id)}
+                  disabled={busyConfigId === cfg.id}
+                >
+                  تست اتصال
+                </button>
+                <button
+                  className="btn secondary"
+                  type="button"
+                  onClick={() => deactivateConfig(cfg.id)}
+                  disabled={busyConfigId === cfg.id || !cfg.is_active}
+                >
+                  غیرفعال
+                </button>
+                <button
+                  className="btn warn"
+                  type="button"
+                  onClick={() => deleteConfig(cfg.id)}
+                  disabled={busyConfigId === cfg.id}
+                >
+                  حذف
+                </button>
+              </div>
             </article>
           ))}
           {configs.length === 0 && (
@@ -134,6 +264,7 @@ export default function AIConfigPage() {
         </div>
 
         {error && <div className="operation-banner warn" style={{ marginTop: '1.5rem' }}>{error}</div>}
+        {info && <div className="operation-banner ok" style={{ marginTop: '1rem' }}>{info}</div>}
       </section>
     </div>
   )
