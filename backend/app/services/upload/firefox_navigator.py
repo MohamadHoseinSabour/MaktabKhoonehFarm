@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.models.course import Course
 from app.models.episode import Episode
 from app.models.setting import Setting
+from app.services.processor.video_metadata import extract_video_metadata, probe_duration_seconds, remux_mp4_for_upload
 
 
 class UploadAutomationError(Exception):
@@ -473,6 +474,9 @@ class MaktabMarketplaceClient:
             'subtitle_path': None,
             'subtitle_missing_reason': None,
             'video_file': None,
+            'video_probe': None,
+            'video_probe_source': None,
+            'video_normalized_for_upload': False,
             'progress': None,
             'returned_to_units': True,
             'units_list_url': self._absolute(chapter.units_url),
@@ -500,7 +504,10 @@ class MaktabMarketplaceClient:
             outcome['unit_action'] = 'update_existing'
             outcome['matched_title'] = unit.title
 
-        self._upload_video_to_unit(unit, video_file)
+        upload_info = self._upload_video_to_unit(unit, video_file)
+        outcome['video_probe'] = upload_info.get('probe')
+        outcome['video_probe_source'] = upload_info.get('source_probe')
+        outcome['video_normalized_for_upload'] = bool(upload_info.get('normalized'))
         outcome['result'] = 'uploaded'
         outcome['progress'] = '100%'
         outcome['editor_url'] = self._absolute(unit.edit_url)
@@ -1024,7 +1031,7 @@ class MaktabMarketplaceClient:
         )
         self._raise_for_response(response, self._absolute(action), allow_redirect=True)
 
-    def _upload_video_to_unit(self, unit: MarketplaceUnit, video_path: str) -> None:
+    def _upload_video_to_unit(self, unit: MarketplaceUnit, video_path: str) -> dict[str, Any]:
         edit_url = self._absolute(unit.edit_url)
         if 'upload-only=true' not in edit_url:
             separator = '&' if '?' in edit_url else '?'
@@ -1032,7 +1039,7 @@ class MaktabMarketplaceClient:
         soup = self._get_soup(edit_url)
         csrf = self._csrf_from_soup(soup)
         obj_id = self._script_value(soup, 'objId') or unit.id
-        self._upload_direct_video(
+        return self._upload_direct_video(
             referer_url=edit_url,
             video_path=video_path,
             upload_type='lecture',
@@ -1052,45 +1059,113 @@ class MaktabMarketplaceClient:
         csrf: str,
         source: str,
         is_teaser: bool,
-    ) -> None:
-        file_type = mimetypes.guess_type(video_path)[0] or 'video/mp4'
-        start = self.session.post(
-            f'{self.base_url}/api/v1/general/upload/direct/start/',
-            headers=self._headers(accept='application/json', referer=referer_url) | {'X-CSRFToken': csrf},
-            data={
-                'csrfmiddlewaretoken': csrf,
-                'file_name': Path(video_path).name,
-                'file_type': file_type,
-                'type': upload_type,
-                'id': obj_id,
-                'source': source,
-                'is_teaser': 'true' if is_teaser else 'false',
-            },
-            timeout=self.REQUEST_TIMEOUT_SECONDS,
-        )
-        self._raise_for_response(start, f'{self.base_url}/api/v1/general/upload/direct/start/')
-        start_payload = start.json()
-        upload_url = start_payload['url']
-        fields = start_payload['fields']
-        file_id = start_payload['id']
-
-        with open(video_path, 'rb') as handle:
-            upload = requests.post(
-                upload_url,
-                data=fields,
-                files={'file': (Path(video_path).name, handle, file_type)},
-                timeout=max(self.REQUEST_TIMEOUT_SECONDS, 900),
+    ) -> dict[str, Any]:
+        prepared = self._prepare_video_upload_file(video_path)
+        upload_path = prepared['path']
+        file_type = mimetypes.guess_type(upload_path)[0] or 'video/mp4'
+        try:
+            start = self.session.post(
+                f'{self.base_url}/api/v1/general/upload/direct/start/',
+                headers=self._headers(accept='application/json', referer=referer_url) | {'X-CSRFToken': csrf},
+                data={
+                    'csrfmiddlewaretoken': csrf,
+                    'file_name': Path(video_path).name,
+                    'file_type': file_type,
+                    'type': upload_type,
+                    'id': obj_id,
+                    'source': source,
+                    'is_teaser': 'true' if is_teaser else 'false',
+                },
+                timeout=self.REQUEST_TIMEOUT_SECONDS,
             )
-        if upload.status_code >= 400:
-            raise UploadConfigurationError(f'S3 video upload failed: {upload.status_code} {upload.text[:300]}')
+            self._raise_for_response(start, f'{self.base_url}/api/v1/general/upload/direct/start/')
+            start_payload = start.json()
+            upload_url = start_payload['url']
+            fields = start_payload['fields']
+            file_id = start_payload['id']
 
-        finish = self.session.post(
-            f'{self.base_url}/api/v1/general/upload/direct/finish/',
-            headers=self._headers(accept='application/json', referer=referer_url) | {'X-CSRFToken': csrf},
-            data={'csrfmiddlewaretoken': csrf, 'file_id': file_id, 'type': upload_type, 'id': obj_id},
-            timeout=self.REQUEST_TIMEOUT_SECONDS,
+            with open(upload_path, 'rb') as handle:
+                upload = requests.post(
+                    upload_url,
+                    data=fields,
+                    files={'file': (Path(video_path).name, handle, file_type)},
+                    timeout=max(self.REQUEST_TIMEOUT_SECONDS, 900),
+                )
+            if upload.status_code >= 400:
+                raise UploadConfigurationError(f'S3 video upload failed: {upload.status_code} {upload.text[:300]}')
+
+            finish = self.session.post(
+                f'{self.base_url}/api/v1/general/upload/direct/finish/',
+                headers=self._headers(accept='application/json', referer=referer_url) | {'X-CSRFToken': csrf},
+                data={'csrfmiddlewaretoken': csrf, 'file_id': file_id, 'type': upload_type, 'id': obj_id},
+                timeout=self.REQUEST_TIMEOUT_SECONDS,
+            )
+            self._raise_for_response(finish, f'{self.base_url}/api/v1/general/upload/direct/finish/')
+            return prepared
+        finally:
+            self._cleanup_prepared_upload_file(prepared)
+
+    def _prepare_video_upload_file(self, video_path: str) -> dict[str, Any]:
+        source_path = Path(video_path)
+        if not source_path.is_file():
+            raise UploadConfigurationError(f'Video file was not found before upload. path={video_path}')
+
+        source_probe = extract_video_metadata(source_path)
+        if not source_probe.get('ok'):
+            raise UploadConfigurationError(
+                f"Could not read local video metadata before upload. path={video_path} error={source_probe.get('error')}"
+            )
+
+        source_duration = probe_duration_seconds(source_probe)
+        if source_duration is None:
+            raise UploadConfigurationError(
+                f'Local video duration is missing or zero before upload. path={video_path}'
+            )
+
+        prepared = {
+            'path': str(source_path),
+            'probe': source_probe,
+            'source_probe': source_probe,
+            'normalized': False,
+            'temporary': False,
+        }
+        if source_path.suffix.lower() != '.mp4':
+            return prepared
+
+        remuxed = remux_mp4_for_upload(source_path)
+        if remuxed.get('error') == 'ffmpeg_missing':
+            return prepared
+        if not remuxed.get('ok'):
+            raise UploadConfigurationError(
+                f"Could not normalize MP4 before upload. path={video_path} error={remuxed.get('error')}"
+            )
+
+        remuxed_probe = remuxed.get('metadata')
+        remuxed_duration = probe_duration_seconds(remuxed_probe if isinstance(remuxed_probe, dict) else None)
+        if remuxed_duration is None:
+            temp_name = str(remuxed.get('path') or '').strip()
+            if temp_name:
+                Path(temp_name).unlink(missing_ok=True)
+            raise UploadConfigurationError(
+                f'Normalized MP4 duration is missing or zero before upload. path={video_path}'
+            )
+
+        prepared.update(
+            {
+                'path': str(remuxed['path']),
+                'probe': remuxed_probe,
+                'normalized': True,
+                'temporary': True,
+            }
         )
-        self._raise_for_response(finish, f'{self.base_url}/api/v1/general/upload/direct/finish/')
+        return prepared
+
+    def _cleanup_prepared_upload_file(self, prepared: dict[str, Any]) -> None:
+        if not prepared.get('temporary'):
+            return
+        temp_name = str(prepared.get('path') or '').strip()
+        if temp_name:
+            Path(temp_name).unlink(missing_ok=True)
 
     def _csrf_from_soup(self, soup: BeautifulSoup) -> str:
         field = soup.find('input', {'name': 'csrfmiddlewaretoken'})
