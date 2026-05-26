@@ -173,7 +173,11 @@ async function runAutoPipelineForEpisode(
   if (!['uploaded', 'uploading'].includes(episode.video_status)) {
     onStatus(`${label}: در حال آپلود...`)
     try {
-      await uploadEpisode(episode.id)
+      const res = await uploadEpisode(episode.id)
+      const isSuccess = res.uploaded?.includes(episode.id) || res.skip_existing === true
+      if (!isSuccess) {
+        throw new Error('آپلود با خطا مواجه شد و نتیجه معتبری ثبت نگردید.')
+      }
     } catch (err) {
       return { ok: false, error: `${label}: خطا در آپلود - ${(err as Error).message}` }
     }
@@ -309,20 +313,52 @@ export default function CourseDetailPage() {
 
     for (const episode of episodesQueue) {
       if (pipelineAbort.current || !mounted.current) break
-      setStatusNote(`آپلود قسمت ${episode.episode_number}...`)
-      try {
-        await uploadEpisode(episode.id)
+      
+      let attempt = 0
+      const maxRetries = 3
+      let success = false
+      let lastErrorMsg = ''
+      
+      while (attempt <= maxRetries && !pipelineAbort.current && mounted.current) {
+        const attemptLabel = attempt > 0 ? ` (تلاش ${attempt + 1})` : ''
+        setStatusNote(`آپلود قسمت ${episode.episode_number}...${attemptLabel}`)
+        try {
+          const res = await uploadEpisode(episode.id)
+          const isSuccess = res.uploaded?.includes(episode.id) || res.skip_existing === true
+          if (!isSuccess) {
+            throw new Error('آپلود با خطا مواجه شد و نتیجه معتبری ثبت نگردید.')
+          }
+          success = true
+          break
+        } catch (err) {
+          lastErrorMsg = getErrorMessage(err)
+          attempt++
+          if (attempt <= maxRetries && !pipelineAbort.current && mounted.current) {
+            await new Promise((resolve) => setTimeout(resolve, 3000))
+          }
+        }
+      }
+
+      if (success) {
         processed++
-      } catch (err) {
+      } else {
         failed++
-        if (mounted.current) setError(`${episode.episode_number}: ${getErrorMessage(err)}`)
+        if (mounted.current) {
+          setError(`آپلود قسمت ${episode.episode_number} پس از چند بار تلاش شکست خورد: ${lastErrorMsg}`)
+          setStatusNote(`عملیات آپلود متوقف شد به دلیل شکست در آپلود قسمت ${episode.episode_number}`)
+        }
+        break // STOP sequential loop on failure
       }
       if (mounted.current) await load()
     }
 
     if (mounted.current) {
-      setStatusNote(`آپلود گروهی تمام شد. موفق: ${processed} | ناموفق: ${failed}`)
-      setRunningGlobalAction(null)
+      if (failed > 0) {
+        setRunningGlobalAction(null)
+      } else {
+        setStatusNote(`آپلود گروهی تمام شد. موفق: ${processed}`)
+        setRunningGlobalAction(null)
+      }
     }
   }
 
@@ -349,15 +385,38 @@ export default function CourseDetailPage() {
     for (const episode of episodesQueue) {
       if (pipelineAbort.current || !mounted.current) break
 
-      const result = await runAutoPipelineForEpisode(episode, (msg) => {
-        if (mounted.current) setStatusNote(msg)
-      })
+      let attempt = 0
+      const maxRetries = 3
+      let success = false
+      let lastErrorMsg = ''
 
-      if (result.ok) {
+      while (attempt <= maxRetries && !pipelineAbort.current && mounted.current) {
+        const attemptLabel = attempt > 0 ? ` (تلاش ${attempt + 1})` : ''
+        const result = await runAutoPipelineForEpisode(episode, (msg) => {
+          if (mounted.current) setStatusNote(`${msg}${attemptLabel}`)
+        })
+
+        if (result.ok) {
+          success = true
+          break
+        } else {
+          lastErrorMsg = result.error ?? 'خطای ناشناخته'
+          attempt++
+          if (attempt <= maxRetries && !pipelineAbort.current && mounted.current) {
+            await new Promise((resolve) => setTimeout(resolve, 3000))
+          }
+        }
+      }
+
+      if (success) {
         processed++
       } else {
         failed++
-        if (mounted.current) setError(result.error ?? 'خطای ناشناخته')
+        if (mounted.current) {
+          setError(`پردازش قسمت ${episode.episode_number} پس از چند بار تلاش شکست خورد: ${lastErrorMsg}`)
+          setStatusNote(`عملیات خودکار متوقف شد به دلیل شکست در قسمت ${episode.episode_number}`)
+        }
+        break // STOP sequential loop on failure
       }
 
       // Reload course data to get updated statuses
@@ -365,8 +424,12 @@ export default function CourseDetailPage() {
     }
 
     if (mounted.current) {
-      setStatusNote(`پردازش خودکار تمام شد. موفق: ${processed} | ناموفق: ${failed}`)
-      setRunningGlobalAction(null)
+      if (failed > 0) {
+        setRunningGlobalAction(null)
+      } else {
+        setStatusNote(`پردازش خودکار تمام شد. موفق: ${processed}`)
+        setRunningGlobalAction(null)
+      }
     }
   }
 

@@ -1,4 +1,4 @@
-﻿import json
+import json
 import html
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -503,11 +503,24 @@ class MaktabMarketplaceClient:
         else:
             outcome['unit_action'] = 'update_existing'
             outcome['matched_title'] = unit.title
+            try:
+                if self._verify_video_uploaded(unit):
+                    outcome['result'] = 'uploaded'
+                    outcome['progress'] = '100% (already verified)'
+                    outcome['editor_url'] = self._absolute(unit.edit_url)
+                    outcome['current_url'] = self._absolute(chapter.units_url)
+                    return outcome
+            except Exception:
+                pass
 
         upload_info = self._upload_video_to_unit(unit, video_file)
         outcome['video_probe'] = upload_info.get('probe')
         outcome['video_probe_source'] = upload_info.get('source_probe')
         outcome['video_normalized_for_upload'] = bool(upload_info.get('normalized'))
+
+        if not self._verify_video_uploaded(unit):
+            raise UploadConfigurationError("Video upload verification failed. The video was not found on the unit edit page after upload.")
+
         outcome['result'] = 'uploaded'
         outcome['progress'] = '100%'
         outcome['editor_url'] = self._absolute(unit.edit_url)
@@ -985,11 +998,29 @@ class MaktabMarketplaceClient:
         finally:
             if file_handle:
                 file_handle.close()
+
+        if response.status_code == 200:
+            err_soup = BeautifulSoup(response.content, 'html.parser', from_encoding='utf-8')
+            errors: list[str] = []
+            for item in err_soup.select('.errorlist li, .invalid-feedback, .help-block.error, .form-error'):
+                text = item.get_text(' ', strip=True)
+                if text:
+                    errors.append(text)
+            if errors:
+                message = '; '.join(dict.fromkeys(errors))
+                raise UploadConfigurationError(f'Lecture unit form validation failed: {message}')
+
         location = response.headers.get('Location') or ''
         match = re.search(r'unit_id=(\d+)', location)
-        if not match:
-            raise UploadConfigurationError(f'Lecture unit was not created. redirect={location}')
-        return MarketplaceUnit(id=match.group(1), title=title, edit_url=location)
+        if match:
+            return MarketplaceUnit(id=match.group(1), title=title, edit_url=location)
+
+        # Fallback: if we were redirected to the units listing or elsewhere, the unit might have been successfully created.
+        unit = self._find_unit(chapter, episode)
+        if unit is not None:
+            return unit
+
+        raise UploadConfigurationError(f'Lecture unit was not created. status={response.status_code} redirect={location}')
 
     def _sync_unit_order(self, chapter: MarketplaceChapter, episodes: list[Episode]) -> None:
         units = self._list_units(chapter)
@@ -1048,6 +1079,39 @@ class MaktabMarketplaceClient:
             source='teacher',
             is_teaser=False,
         )
+
+    def _verify_video_uploaded(self, unit: MarketplaceUnit) -> bool:
+        edit_url = self._absolute(unit.edit_url)
+        soup = self._get_soup(edit_url)
+        
+        # Check 1: script variables indicating video presence
+        has_video_js = self._script_bool_value(soup, 'hasVideo', default=False) or \
+                       self._script_bool_value(soup, 'has_video', default=False) or \
+                       self._script_bool_value(soup, 'isVideoUploaded', default=False)
+        if has_video_js:
+            return True
+            
+        # Check 2: presence of video tags or video links (HLS, Dash, MP4)
+        if soup.find('video') or soup.find('source'):
+            return True
+            
+        for link in soup.find_all('a', href=True):
+            href = link.get('href', '').lower()
+            if '.mp4' in href or '.m3u8' in href or '/hls/' in href or '/dash/' in href:
+                return True
+                
+        # Check 3: Check for delete/change buttons or labels indicating video exists
+        text_content = soup.get_text(' ')
+        video_keywords = ['حذف ویدیو', 'تغییر ویدیو', 'دانلود ویدیو', 'ویدیو فعلی', 'مشاهده ویدیو', 'حذف فایل', 'در حال پردازش', 'در حال تبدیل', 'پردازش ویدیو']
+        if any(keyword in text_content for keyword in video_keywords):
+            return True
+            
+        # Check 4: Check if there's any file input labeled for video, but also a container showing info
+        for el in soup.select('[class*="video"], [id*="video"], [class*="player"], [id*="player"]'):
+            if el.name in {'div', 'span', 'p', 'a'} and any(kw in el.get_text().lower() for kw in ['مگابایت', 'mb', 'ثانیه', 'دقیقه']):
+                return True
+                
+        return False
 
     def _upload_direct_video(
         self,
